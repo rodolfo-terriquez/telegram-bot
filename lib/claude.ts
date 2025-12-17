@@ -70,9 +70,24 @@ export async function parseIntent(userMessage: string): Promise<Intent> {
   }
 
   try {
-    const intent = JSON.parse(textContent.text) as Intent;
+    // Try to extract JSON from the response (Claude sometimes wraps it in markdown)
+    let jsonText = textContent.text.trim();
+    
+    // Remove markdown code blocks if present
+    if (jsonText.startsWith("```")) {
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+    }
+    
+    // Try to find JSON object in the response
+    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonText = jsonMatch[0];
+    }
+    
+    const intent = JSON.parse(jsonText) as Intent;
     return intent;
-  } catch {
+  } catch (error) {
+    console.error("Failed to parse intent:", textContent.text, error);
     // If parsing fails, return a conversation intent with error handling
     return {
       type: "conversation",
