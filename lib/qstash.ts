@@ -35,6 +35,8 @@ export async function scheduleReminder(
   const client = getClient();
   const notifyUrl = getNotifyUrl();
 
+  console.log(`QStash: Scheduling to ${notifyUrl} with delay ${delayMinutes * 60}s`);
+
   const payload: NotificationPayload = {
     chatId,
     taskId,
@@ -48,6 +50,7 @@ export async function scheduleReminder(
     retries: 3,
   });
 
+  console.log(`QStash: Message ID ${result.messageId}`);
   return result.messageId;
 }
 

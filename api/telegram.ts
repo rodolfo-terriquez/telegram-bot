@@ -111,16 +111,23 @@ async function handleReminder(
   );
 
   // Schedule the reminder via QStash
-  const messageId = await scheduleReminder(
-    chatId,
-    task.id,
-    intent.delayMinutes,
-    false
-  );
+  try {
+    console.log(`Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`);
+    const messageId = await scheduleReminder(
+      chatId,
+      task.id,
+      intent.delayMinutes,
+      false
+    );
+    console.log(`QStash message scheduled: ${messageId}`);
 
-  // Store the QStash message ID for potential cancellation
-  task.qstashMessageId = messageId;
-  await redis.updateTask(task);
+    // Store the QStash message ID for potential cancellation
+    task.qstashMessageId = messageId;
+    await redis.updateTask(task);
+  } catch (error) {
+    console.error("Failed to schedule QStash reminder:", error);
+    // Still continue - task is saved, just won't get a push notification
+  }
 
   // Format time for user
   const timeStr = formatDelay(intent.delayMinutes);
