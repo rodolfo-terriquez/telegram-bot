@@ -15,12 +15,12 @@ function getClient(): Client {
 }
 
 function getNotifyUrl(): string {
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : process.env.BASE_URL;
+  // Prefer BASE_URL (stable production URL) over VERCEL_URL (deployment-specific)
+  const baseUrl = process.env.BASE_URL
+    || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
 
   if (!baseUrl) {
-    throw new Error("VERCEL_URL or BASE_URL is not set");
+    throw new Error("BASE_URL or VERCEL_URL is not set");
   }
 
   return `${baseUrl}/api/notify`;
