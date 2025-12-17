@@ -52,7 +52,7 @@ export async function parseIntent(userMessage: string): Promise<Intent> {
   const client = getClient();
 
   const message = await client.messages.create({
-    model: "claude-3-5-sonnet-20241022",
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 500,
     system: SYSTEM_PROMPT,
     messages: [
@@ -99,7 +99,7 @@ export async function generateNaggingMessage(
   const urgency = urgencyPrompts[Math.min(naggingLevel, 4)] || urgencyPrompts[4];
 
   const message = await client.messages.create({
-    model: "claude-3-5-sonnet-20241022",
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 150,
     system: `You are an ADHD support assistant. Generate a short, motivating reminder message for a task. ${urgency} Keep it under 2 sentences. Be supportive, not annoying. Don't use emojis excessively.`,
     messages: [
@@ -135,7 +135,7 @@ export async function generateDailySummary(
       : "No pending tasks.";
 
   const message = await client.messages.create({
-    model: "claude-3-5-sonnet-20241022",
+    model: "claude-haiku-4-5-20251001",
     max_tokens: 500,
     system: `You are an ADHD support assistant. Create a friendly, organized daily summary. Be encouraging and help the user see patterns or connections in their thoughts. Keep it concise but insightful.`,
     messages: [
