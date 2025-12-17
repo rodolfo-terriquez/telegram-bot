@@ -1,4 +1,6 @@
 {
+  "buildCommand": "",
+  "outputDirectory": "",
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 30

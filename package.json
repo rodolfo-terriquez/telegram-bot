@@ -5,7 +5,6 @@
   "main": "api/telegram.ts",
   "scripts": {
     "dev": "vercel dev",
-    "build": "tsc",
     "lint": "eslint . --ext .ts",
     "type-check": "tsc --noEmit"
   },
