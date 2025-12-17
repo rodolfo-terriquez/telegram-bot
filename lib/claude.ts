@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { Intent, Task, BrainDump } from "./types";
+import type { Intent, Task, BrainDump } from "./types.js";
 
 let anthropicClient: Anthropic | null = null;
 

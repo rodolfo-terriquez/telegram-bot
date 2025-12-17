@@ -1,6 +1,7 @@
 {
   "name": "adhd-telegram-bot",
   "version": "1.0.0",
+  "type": "module",
   "description": "ADHD support Telegram bot with voice transcription, reminders, brain dumps, and intelligent nagging",
   "main": "api/telegram.ts",
   "scripts": {

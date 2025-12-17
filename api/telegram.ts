@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { TelegramUpdate, Intent } from "../lib/types";
-import * as telegram from "../lib/telegram";
-import { transcribeAudio } from "../lib/whisper";
-import { parseIntent, calculateNextNagDelay } from "../lib/claude";
-import * as redis from "../lib/redis";
-import { scheduleReminder } from "../lib/qstash";
+import type { TelegramUpdate, Intent } from "../lib/types.js";
+import * as telegram from "../lib/telegram.js";
+import { transcribeAudio } from "../lib/whisper.js";
+import { parseIntent, calculateNextNagDelay } from "../lib/claude.js";
+import * as redis from "../lib/redis.js";
+import { scheduleReminder } from "../lib/qstash.js";
 
 export default async function handler(
   req: VercelRequest,

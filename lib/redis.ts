@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import type { Task, BrainDump } from "./types";
+import type { Task, BrainDump } from "./types.js";
 
 let redisClient: Redis | null = null;
 

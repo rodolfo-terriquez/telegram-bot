@@ -47,7 +47,7 @@ export default async function handler(
       }
     );
 
-    const data = await response.json();
+    const data = (await response.json()) as { ok: boolean; description?: string };
 
     if (!response.ok || !data.ok) {
       res.status(500).json({

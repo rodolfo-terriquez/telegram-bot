@@ -1,4 +1,4 @@
-import type { TelegramFile } from "./types";
+import type { TelegramFile } from "./types.js";
 
 const TELEGRAM_API = "https://api.telegram.org/bot";
 

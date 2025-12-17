@@ -1,5 +1,5 @@
 import { Client } from "@upstash/qstash";
-import type { NotificationPayload } from "./types";
+import type { NotificationPayload } from "./types.js";
 
 let qstashClient: Client | null = null;
 

@@ -1,13 +1,13 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { NotificationPayload } from "../lib/types";
-import * as telegram from "../lib/telegram";
-import * as redis from "../lib/redis";
-import { scheduleReminder, verifySignature } from "../lib/qstash";
+import type { NotificationPayload } from "../lib/types.js";
+import * as telegram from "../lib/telegram.js";
+import * as redis from "../lib/redis.js";
+import { scheduleReminder, verifySignature } from "../lib/qstash.js";
 import {
   generateNaggingMessage,
   generateDailySummary,
   calculateNextNagDelay,
-} from "../lib/claude";
+} from "../lib/claude.js";
 
 export default async function handler(
   req: VercelRequest,
