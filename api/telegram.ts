@@ -28,6 +28,28 @@ export default async function handler(
     const { message } = update;
     const chatId = message.chat.id;
 
+    // Check if user is allowed (if ALLOWED_USERS is set)
+    const allowedUsers = process.env.ALLOWED_USERS;
+    if (allowedUsers) {
+      const allowed = allowedUsers.split(",").map((u) => u.trim().toLowerCase());
+      const userId = message.from?.id?.toString();
+      const username = message.from?.username?.toLowerCase();
+
+      const isAllowed =
+        (userId && allowed.includes(userId)) ||
+        (username && allowed.includes(username));
+
+      if (!isAllowed) {
+        console.log(`Unauthorized user: ${username} (${userId})`);
+        await telegram.sendMessage(
+          chatId,
+          "Sorry, this bot is private. Contact the owner for access."
+        );
+        res.status(200).json({ ok: true });
+        return;
+      }
+    }
+
     // Register this chat for daily summaries
     await redis.registerChat(chatId);
 
