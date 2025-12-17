@@ -1,5 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import type { Intent, Task, BrainDump } from "./types.js";
+import type { ConversationMessage } from "./redis.js";
 
 let anthropicClient: Anthropic | null = null;
 
@@ -48,19 +50,34 @@ Response formats:
 
 Be lenient and helpful. ADHD users may send fragmented or unclear messages - try to understand their intent.`;
 
-export async function parseIntent(userMessage: string): Promise<Intent> {
+export async function parseIntent(
+  userMessage: string,
+  conversationHistory: ConversationMessage[] = []
+): Promise<Intent> {
   const client = getClient();
+
+  // Build messages array with conversation history
+  const messages: MessageParam[] = [];
+  
+  // Add conversation history (skip the JSON responses, just include user context)
+  for (const msg of conversationHistory) {
+    if (msg.role === "user") {
+      messages.push({ role: "user", content: msg.content });
+    } else {
+      // For assistant messages, add a simplified version to maintain context
+      // without confusing the model with JSON responses
+      messages.push({ role: "assistant", content: "[Previous response processed]" });
+    }
+  }
+  
+  // Add current message
+  messages.push({ role: "user", content: userMessage });
 
   const message = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
     max_tokens: 500,
     system: SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: userMessage,
-      },
-    ],
+    messages,
   });
 
   // Extract text from the response

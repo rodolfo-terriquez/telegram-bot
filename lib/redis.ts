@@ -178,3 +178,60 @@ export async function getActiveChats(): Promise<number[]> {
   return (chatIds || []).map((id) => parseInt(id, 10));
 }
 
+// Conversation memory
+const CONVERSATION_KEY = (chatId: number) => `conversation:${chatId}`;
+const MAX_CONVERSATION_LENGTH = 10; // Keep last 10 message pairs
+const CONVERSATION_TTL = 24 * 60 * 60; // 24 hours
+
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+}
+
+export async function getConversationHistory(
+  chatId: number
+): Promise<ConversationMessage[]> {
+  const redis = getClient();
+  const key = CONVERSATION_KEY(chatId);
+  const data = await redis.get<string>(key);
+  
+  if (!data) return [];
+  
+  try {
+    return typeof data === "string" ? JSON.parse(data) : data;
+  } catch {
+    return [];
+  }
+}
+
+export async function addToConversation(
+  chatId: number,
+  userMessage: string,
+  assistantResponse: string
+): Promise<void> {
+  const redis = getClient();
+  const key = CONVERSATION_KEY(chatId);
+  
+  // Get existing conversation
+  const history = await getConversationHistory(chatId);
+  
+  // Add new messages
+  const now = Date.now();
+  history.push(
+    { role: "user", content: userMessage, timestamp: now },
+    { role: "assistant", content: assistantResponse, timestamp: now }
+  );
+  
+  // Keep only the last N message pairs (N*2 messages)
+  const trimmed = history.slice(-(MAX_CONVERSATION_LENGTH * 2));
+  
+  // Save with TTL
+  await redis.set(key, JSON.stringify(trimmed), { ex: CONVERSATION_TTL });
+}
+
+export async function clearConversation(chatId: number): Promise<void> {
+  const redis = getClient();
+  await redis.del(CONVERSATION_KEY(chatId));
+}
+

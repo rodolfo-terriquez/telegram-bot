@@ -83,11 +83,19 @@ export default async function handler(
       return;
     }
 
-    // Parse intent using Claude
-    const intent = await parseIntent(userText);
+    // Get conversation history for context
+    const conversationHistory = await redis.getConversationHistory(chatId);
+
+    // Parse intent using Claude (with conversation context)
+    const intent = await parseIntent(userText, conversationHistory);
 
     // Handle the intent
-    await handleIntent(chatId, intent);
+    const response = await handleIntent(chatId, intent);
+
+    // Save to conversation history
+    if (response) {
+      await redis.addToConversation(chatId, userText, response);
+    }
 
     res.status(200).json({ ok: true });
   } catch (error) {
@@ -96,34 +104,30 @@ export default async function handler(
   }
 }
 
-async function handleIntent(chatId: number, intent: Intent): Promise<void> {
+async function handleIntent(chatId: number, intent: Intent): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
-      await handleReminder(chatId, intent);
-      break;
+      return await handleReminder(chatId, intent);
 
     case "brain_dump":
-      await handleBrainDump(chatId, intent);
-      break;
+      return await handleBrainDump(chatId, intent);
 
     case "mark_done":
-      await handleMarkDone(chatId, intent);
-      break;
+      return await handleMarkDone(chatId, intent);
 
     case "list_tasks":
-      await handleListTasks(chatId);
-      break;
+      return await handleListTasks(chatId);
 
     case "conversation":
       await telegram.sendMessage(chatId, intent.response);
-      break;
+      return intent.response;
   }
 }
 
 async function handleReminder(
   chatId: number,
   intent: { type: "reminder"; task: string; delayMinutes: number; isImportant: boolean }
-): Promise<void> {
+): Promise<string> {
   // Create the task in Redis
   const task = await redis.createTask(
     chatId,
@@ -155,57 +159,50 @@ async function handleReminder(
   const timeStr = formatDelay(intent.delayMinutes);
   const importantStr = intent.isImportant ? " (I'll nag you until it's done!)" : "";
 
-  await telegram.sendMessage(
-    chatId,
-    `✅ Got it! I'll remind you to *${intent.task}* in ${timeStr}${importantStr}`
-  );
+  const response = `✅ Got it! I'll remind you to *${intent.task}* in ${timeStr}${importantStr}`;
+  await telegram.sendMessage(chatId, response);
+  return response;
 }
 
 async function handleBrainDump(
   chatId: number,
   intent: { type: "brain_dump"; content: string }
-): Promise<void> {
+): Promise<string> {
   await redis.createBrainDump(chatId, intent.content);
 
-  await telegram.sendMessage(
-    chatId,
-    `💭 Captured! I've saved that thought. You'll see it in your daily summary.`
-  );
+  const response = `💭 Captured! I've saved that thought. You'll see it in your daily summary.`;
+  await telegram.sendMessage(chatId, response);
+  return response;
 }
 
 async function handleMarkDone(
   chatId: number,
   intent: { type: "mark_done"; taskDescription?: string }
-): Promise<void> {
+): Promise<string> {
   // Find the task
   const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
 
   if (!task) {
-    await telegram.sendMessage(
-      chatId,
-      "I couldn't find a pending task to mark as done. You can say 'list tasks' to see your pending items."
-    );
-    return;
+    const response = "I couldn't find a pending task to mark as done. You can say 'list tasks' to see your pending items.";
+    await telegram.sendMessage(chatId, response);
+    return response;
   }
 
   // Complete the task
   await redis.completeTask(chatId, task.id);
 
-  await telegram.sendMessage(
-    chatId,
-    `🎉 Awesome! Marked *${task.content}* as done. Great job!`
-  );
+  const response = `🎉 Awesome! Marked *${task.content}* as done. Great job!`;
+  await telegram.sendMessage(chatId, response);
+  return response;
 }
 
-async function handleListTasks(chatId: number): Promise<void> {
+async function handleListTasks(chatId: number): Promise<string> {
   const tasks = await redis.getPendingTasks(chatId);
 
   if (tasks.length === 0) {
-    await telegram.sendMessage(
-      chatId,
-      "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘"
-    );
-    return;
+    const response = "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘";
+    await telegram.sendMessage(chatId, response);
+    return response;
   }
 
   const taskList = tasks
@@ -216,10 +213,9 @@ async function handleListTasks(chatId: number): Promise<void> {
     })
     .join("\n\n");
 
-  await telegram.sendMessage(
-    chatId,
-    `📋 *Your pending tasks:*\n\n${taskList}\n\nReply "done" when you complete something!`
-  );
+  const response = `📋 *Your pending tasks:*\n\n${taskList}\n\nReply "done" when you complete something!`;
+  await telegram.sendMessage(chatId, response);
+  return response;
 }
 
 function formatDelay(minutes: number): string {
