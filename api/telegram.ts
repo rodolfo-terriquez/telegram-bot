@@ -2,9 +2,16 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { TelegramUpdate, Intent } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
-import { parseIntent, calculateNextNagDelay } from "../lib/claude.js";
+import { parseIntent } from "../lib/claude.js";
 import * as redis from "../lib/redis.js";
-import { scheduleReminder, cancelScheduledMessage } from "../lib/qstash.js";
+import {
+  scheduleReminder,
+  scheduleDailyCheckin,
+  scheduleWeeklySummary,
+  scheduleDailySummary,
+  deleteSchedule,
+  cancelScheduledMessage,
+} from "../lib/qstash.js";
 
 export default async function handler(
   req: VercelRequest,
@@ -52,8 +59,11 @@ export default async function handler(
       }
     }
 
-    // Register this chat for daily summaries
-    await redis.registerChat(chatId);
+    // Register this chat and set up default schedules for new users
+    const isNewUser = await redis.registerChat(chatId);
+    if (isNewUser) {
+      await setupDefaultSchedules(chatId);
+    }
 
     let userText: string;
 
@@ -88,11 +98,18 @@ export default async function handler(
       return;
     }
 
-    // Get conversation history for context
-    const conversationHistory = await redis.getConversationHistory(chatId);
+    // Get conversation history and check-in state for context
+    const [conversationHistory, isAwaitingCheckin] = await Promise.all([
+      redis.getConversationHistory(chatId),
+      redis.isAwaitingCheckin(chatId),
+    ]);
 
     // Parse intent using Claude (with conversation context)
-    const intent = await parseIntent(userText, conversationHistory);
+    const intent = await parseIntent(
+      userText,
+      conversationHistory,
+      isAwaitingCheckin,
+    );
 
     // Handle the intent
     const response = await handleIntent(chatId, intent);
@@ -123,8 +140,8 @@ async function handleIntent(
     case "mark_done":
       return await handleMarkDone(chatId, intent);
 
-    case "delete_reminder":
-      return await handleDeleteReminder(chatId, intent);
+    case "cancel_task":
+      return await handleCancelTask(chatId, intent);
 
     case "list_tasks":
       return await handleListTasks(chatId);
@@ -132,6 +149,12 @@ async function handleIntent(
     case "conversation":
       await telegram.sendMessage(chatId, intent.response);
       return intent.response;
+
+    case "checkin_response":
+      return await handleCheckinResponse(chatId, intent);
+
+    case "set_checkin_time":
+      return await handleSetCheckinTime(chatId, intent);
   }
 }
 
@@ -212,6 +235,11 @@ async function handleMarkDone(
     return response;
   }
 
+  // Cancel any scheduled reminder/nag for this task
+  if (task.qstashMessageId) {
+    await cancelScheduledMessage(task.qstashMessageId);
+  }
+
   // Complete the task
   await redis.completeTask(chatId, task.id);
 
@@ -220,9 +248,9 @@ async function handleMarkDone(
   return response;
 }
 
-async function handleDeleteReminder(
+async function handleCancelTask(
   chatId: number,
-  intent: { type: "delete_reminder"; taskDescription?: string },
+  intent: { type: "cancel_task"; taskDescription?: string },
 ): Promise<string> {
   // Find the task
   const task = await redis.findTaskByDescription(
@@ -232,20 +260,20 @@ async function handleDeleteReminder(
 
   if (!task) {
     const response =
-      "I couldn't find a pending reminder to delete. You can say 'list tasks' to see your pending items.";
+      "I couldn't find a pending task to cancel. You can say 'list tasks' to see your pending items.";
     await telegram.sendMessage(chatId, response);
     return response;
   }
 
-  // Cancel the QStash scheduled message if it exists
+  // Cancel any scheduled reminder/nag for this task
   if (task.qstashMessageId) {
     await cancelScheduledMessage(task.qstashMessageId);
   }
 
-  // Delete the task from Redis
+  // Delete the task
   await redis.deleteTask(chatId, task.id);
 
-  const response = `🗑️ Deleted reminder: *${task.content}*`;
+  const response = `✅ Cancelled *${task.content}*. No worries, priorities change!`;
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -308,4 +336,119 @@ function formatFutureTime(timestamp: number): string {
 
   const days = Math.floor(hours / 24);
   return `in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+async function handleCheckinResponse(
+  chatId: number,
+  intent: { type: "checkin_response"; rating: number; notes?: string },
+): Promise<string> {
+  // Save the check-in
+  await redis.saveCheckIn(chatId, intent.rating, intent.notes);
+
+  // Clear the awaiting state
+  await redis.clearAwaitingCheckin(chatId);
+
+  const notesAck = intent.notes ? " I've noted your thoughts too." : "";
+  const response = `Got it! Logged your check-in: ${intent.rating}/5.${notesAck} Keep it up!`;
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleSetCheckinTime(
+  chatId: number,
+  intent: { type: "set_checkin_time"; hour: number; minute: number },
+): Promise<string> {
+  const { hour, minute } = intent;
+
+  // Get existing preferences to check for old schedule
+  const existingPrefs = await redis.getUserPreferences(chatId);
+
+  // Delete old schedules if they exist
+  if (existingPrefs?.checkinScheduleId) {
+    await deleteSchedule(existingPrefs.checkinScheduleId);
+  }
+  if (existingPrefs?.weeklySummaryScheduleId) {
+    await deleteSchedule(existingPrefs.weeklySummaryScheduleId);
+  }
+  if (existingPrefs?.dailySummaryScheduleId) {
+    await deleteSchedule(existingPrefs.dailySummaryScheduleId);
+  }
+
+  // Create new cron expressions (minute hour * * *)
+  const cronExpression = `${minute} ${hour} * * *`;
+  const weeklyCron = `${minute} ${hour} * * 0`; // Same time on Sundays
+
+  // Schedule new check-in, daily summary, and weekly summary
+  const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
+  const dailySummaryScheduleId = await scheduleDailySummary(
+    chatId,
+    cronExpression,
+  );
+  const weeklySummaryScheduleId = await scheduleWeeklySummary(
+    chatId,
+    weeklyCron,
+  );
+
+  // Save preferences with all schedule IDs
+  const prefs = await redis.setCheckinTime(
+    chatId,
+    hour,
+    minute,
+    checkinScheduleId,
+  );
+  prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
+  prefs.dailySummaryScheduleId = dailySummaryScheduleId;
+  await redis.saveUserPreferences(prefs);
+
+  // Format time for display
+  const period = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+  const displayMinute = minute.toString().padStart(2, "0");
+  const timeStr = `${displayHour}:${displayMinute} ${period}`;
+
+  const response = `Done! I'll check in with you daily at ${timeStr}. You'll also get a daily summary and a weekly summary on Sundays at the same time.`;
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function setupDefaultSchedules(chatId: number): Promise<void> {
+  // Default check-in time: 8 PM (20:00)
+  const defaultHour = 20;
+  const defaultMinute = 0;
+
+  try {
+    // Create cron expressions
+    const cronExpression = `${defaultMinute} ${defaultHour} * * *`;
+    const weeklyCron = `${defaultMinute} ${defaultHour} * * 0`; // Sundays
+
+    // Schedule all recurring notifications
+    const checkinScheduleId = await scheduleDailyCheckin(
+      chatId,
+      cronExpression,
+    );
+    const dailySummaryScheduleId = await scheduleDailySummary(
+      chatId,
+      cronExpression,
+    );
+    const weeklySummaryScheduleId = await scheduleWeeklySummary(
+      chatId,
+      weeklyCron,
+    );
+
+    // Save preferences
+    const prefs = await redis.setCheckinTime(
+      chatId,
+      defaultHour,
+      defaultMinute,
+      checkinScheduleId,
+    );
+    prefs.dailySummaryScheduleId = dailySummaryScheduleId;
+    prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
+    await redis.saveUserPreferences(prefs);
+
+    console.log(`Set up default schedules for new user ${chatId}`);
+  } catch (error) {
+    console.error(`Failed to set up default schedules for ${chatId}:`, error);
+    // Don't throw - this is a nice-to-have, not critical
+  }
 }

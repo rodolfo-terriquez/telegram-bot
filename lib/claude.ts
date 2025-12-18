@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import type { Intent, Task, BrainDump } from "./types.js";
+import type { Intent, Task, BrainDump, CheckIn } from "./types.js";
 import type { ConversationMessage } from "./redis.js";
 
 let anthropicClient: Anthropic | null = null;
@@ -18,7 +18,10 @@ function getClient(): Anthropic {
 
 const SYSTEM_PROMPT = `You are an ADHD support assistant integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
 
-You MUST respond with valid JSON only. No markdown, no explanation, just the JSON object.
+CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no emojis, just the raw JSON object.
+- Do NOT mimic the format of previous responses shown in conversation history
+- Previous assistant responses shown as "[I responded to the user with: ...]" are for CONTEXT ONLY
+- Your output must ALWAYS be a JSON object like {"type": "...", ...}
 
 Possible intents:
 1. "reminder" - User wants to be reminded about something
@@ -34,15 +37,25 @@ Possible intents:
    - Keywords: "done", "finished", "completed", "did it"
    - Include any task description they mention to help match it
 
-4. "delete_reminder" - User wants to delete/cancel a reminder WITHOUT completing it
-   - Keywords: "delete", "cancel", "remove", "stop reminding", "nevermind", "forget"
+4. "cancel_task" - User wants to cancel/delete a task without completing it
+   - Keywords: "cancel", "delete", "remove", "nevermind", "forget about", "skip", "stop reminding"
    - This is different from mark_done - use this when the user wants to cancel a task, not when they completed it
    - Include any task description they mention to help match it
 
 5. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
 
-6. "conversation" - General chat or unclear intent
+6. "checkin_response" - User is responding to a daily check-in prompt
+   - They provide a rating from 1-5 (how organized they felt)
+   - May include optional notes about their day
+   - Examples: "3", "4 - pretty good day", "2, felt scattered", "5! crushed it today"
+
+7. "set_checkin_time" - User wants to change their daily check-in time
+   - Keywords: "set checkin", "change checkin time", "checkin at"
+   - Extract hour (0-23) and minute (0-59)
+   - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
+
+8. "conversation" - General chat or unclear intent
    - Provide a helpful, friendly response
    - If you can't determine the intent, ask clarifying questions
 
@@ -50,8 +63,10 @@ Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
-- delete_reminder: {"type": "delete_reminder", "taskDescription": "optional description to match"}
+- cancel_task: {"type": "cancel_task", "taskDescription": "optional description to match"}
 - list_tasks: {"type": "list_tasks"}
+- checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
+- set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
 - conversation: {"type": "conversation", "response": "your message to the user"}
 
 Be lenient and helpful. ADHD users may send fragmented or unclear messages - try to understand their intent.`;
@@ -59,28 +74,36 @@ Be lenient and helpful. ADHD users may send fragmented or unclear messages - try
 export async function parseIntent(
   userMessage: string,
   conversationHistory: ConversationMessage[] = [],
+  isAwaitingCheckin: boolean = false,
 ): Promise<Intent> {
   const client = getClient();
 
   // Build messages array with conversation history
   const messages: MessageParam[] = [];
 
-  // Add conversation history (skip the JSON responses, just include user context)
+  // Add conversation history with context markers
+  // We need to distinguish between user-facing responses (for context) and the JSON format Claude should output
   for (const msg of conversationHistory) {
     if (msg.role === "user") {
       messages.push({ role: "user", content: msg.content });
     } else {
-      // For assistant messages, add a simplified version to maintain context
-      // without confusing the model with JSON responses
+      // Wrap assistant messages to indicate they were user-facing responses
+      // This prevents Claude from mimicking the response format instead of outputting JSON
       messages.push({
         role: "assistant",
-        content: "[Previous response processed]",
+        content: `[I responded to the user with: "${msg.content}"]`,
       });
     }
   }
 
+  // Build the current message with context
+  let contextualMessage = userMessage;
+  if (isAwaitingCheckin) {
+    contextualMessage = `[CONTEXT: The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.]\n\nUser message: ${userMessage}`;
+  }
+
   // Add current message
-  messages.push({ role: "user", content: userMessage });
+  messages.push({ role: "user", content: contextualMessage });
 
   const message = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
@@ -218,4 +241,90 @@ export function calculateNextNagDelay(
 
   const delay = baseDelays[Math.min(naggingLevel, baseDelays.length - 1)];
   return Math.round(delay * multiplier);
+}
+
+export async function generateCheckinPrompt(): Promise<string> {
+  const client = getClient();
+
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 150,
+    system: `You are an ADHD support assistant. Generate a friendly, brief daily check-in question asking the user to rate how organized they felt today on a scale of 1-5. Encourage them to add notes if they want. Keep it warm and casual, under 2 sentences. Vary your wording to keep it fresh.`,
+    messages: [
+      {
+        role: "user",
+        content: "Generate a daily check-in prompt.",
+      },
+    ],
+  });
+
+  const textContent = message.content.find((block) => block.type === "text");
+  if (!textContent || textContent.type !== "text") {
+    return "Hey! Quick check-in: On a scale of 1-5, how organized did you feel today? Feel free to add any notes!";
+  }
+
+  return textContent.text;
+}
+
+export async function generateWeeklyInsights(
+  checkIns: CheckIn[],
+  dumps: BrainDump[],
+  completedTaskCount: number,
+): Promise<string> {
+  const client = getClient();
+
+  const checkInsText =
+    checkIns.length > 0
+      ? checkIns
+          .map((c) => {
+            const dayName = new Date(c.date).toLocaleDateString("en-US", {
+              weekday: "long",
+            });
+            const notesStr = c.notes ? ` - "${c.notes}"` : "";
+            return `- ${dayName}: ${c.rating}/5${notesStr}`;
+          })
+          .join("\n")
+      : "No check-ins this week.";
+
+  const avgRating =
+    checkIns.length > 0
+      ? (
+          checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length
+        ).toFixed(1)
+      : "N/A";
+
+  const dumpsText =
+    dumps.length > 0
+      ? dumps.map((d) => `- ${d.content}`).join("\n")
+      : "No brain dumps this week.";
+
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 600,
+    system: `You are an ADHD support assistant. Create an insightful weekly summary based on the user's daily check-ins. Look for patterns (e.g., which days were better/worse, any themes in their notes). Offer one or two gentle, actionable suggestions. Be encouraging and supportive. Keep it concise but meaningful.`,
+    messages: [
+      {
+        role: "user",
+        content: `Here's my week:
+
+Daily check-ins (1-5 organization rating):
+${checkInsText}
+
+Average rating: ${avgRating}
+Tasks completed: ${completedTaskCount}
+Brain dumps captured: ${dumps.length}
+
+${dumps.length > 0 ? `Brain dump topics:\n${dumpsText}` : ""}
+
+Please provide insights and patterns you notice.`,
+      },
+    ],
+  });
+
+  const textContent = message.content.find((block) => block.type === "text");
+  if (!textContent || textContent.type !== "text") {
+    return `📊 Weekly Summary\n\nCheck-ins: ${checkIns.length}/7 days\nAverage rating: ${avgRating}\nTasks completed: ${completedTaskCount}`;
+  }
+
+  return `📊 Weekly Summary\n\n${textContent.text}`;
 }
