@@ -25,19 +25,24 @@ Possible intents:
    - Extract the task description and delay time
    - If they mention "important" or "nag me", set isImportant to true
    - Convert time expressions to minutes (e.g., "in 2 hours" = 120 minutes, "in 30 min" = 30 minutes)
-   
+
 2. "brain_dump" - User wants to quickly capture a thought/idea
    - Keywords: "dump", "note", "idea", "thought", "remember this", just random stream of consciousness
    - If the message seems like a random thought without a clear action, treat it as a brain dump
-   
+
 3. "mark_done" - User indicates they completed a task
    - Keywords: "done", "finished", "completed", "did it"
    - Include any task description they mention to help match it
-   
-4. "list_tasks" - User wants to see their pending tasks/reminders
+
+4. "delete_reminder" - User wants to delete/cancel a reminder WITHOUT completing it
+   - Keywords: "delete", "cancel", "remove", "stop reminding", "nevermind", "forget"
+   - This is different from mark_done - use this when the user wants to cancel a task, not when they completed it
+   - Include any task description they mention to help match it
+
+5. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
-   
-5. "conversation" - General chat or unclear intent
+
+6. "conversation" - General chat or unclear intent
    - Provide a helpful, friendly response
    - If you can't determine the intent, ask clarifying questions
 
@@ -45,6 +50,7 @@ Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
+- delete_reminder: {"type": "delete_reminder", "taskDescription": "optional description to match"}
 - list_tasks: {"type": "list_tasks"}
 - conversation: {"type": "conversation", "response": "your message to the user"}
 
@@ -52,13 +58,13 @@ Be lenient and helpful. ADHD users may send fragmented or unclear messages - try
 
 export async function parseIntent(
   userMessage: string,
-  conversationHistory: ConversationMessage[] = []
+  conversationHistory: ConversationMessage[] = [],
 ): Promise<Intent> {
   const client = getClient();
 
   // Build messages array with conversation history
   const messages: MessageParam[] = [];
-  
+
   // Add conversation history (skip the JSON responses, just include user context)
   for (const msg of conversationHistory) {
     if (msg.role === "user") {
@@ -66,10 +72,13 @@ export async function parseIntent(
     } else {
       // For assistant messages, add a simplified version to maintain context
       // without confusing the model with JSON responses
-      messages.push({ role: "assistant", content: "[Previous response processed]" });
+      messages.push({
+        role: "assistant",
+        content: "[Previous response processed]",
+      });
     }
   }
-  
+
   // Add current message
   messages.push({ role: "user", content: userMessage });
 
@@ -89,18 +98,20 @@ export async function parseIntent(
   try {
     // Try to extract JSON from the response (Claude sometimes wraps it in markdown)
     let jsonText = textContent.text.trim();
-    
+
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
-      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+      jsonText = jsonText
+        .replace(/^```(?:json)?\n?/, "")
+        .replace(/\n?```$/, "");
     }
-    
+
     // Try to find JSON object in the response
     const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       jsonText = jsonMatch[0];
     }
-    
+
     const intent = JSON.parse(jsonText) as Intent;
     return intent;
   } catch (error) {
@@ -116,7 +127,7 @@ export async function parseIntent(
 
 export async function generateNaggingMessage(
   task: Task,
-  naggingLevel: number
+  naggingLevel: number,
 ): Promise<string> {
   const client = getClient();
 
@@ -128,7 +139,8 @@ export async function generateNaggingMessage(
     4: "Very urgent. Final warnings - this really needs to get done.",
   };
 
-  const urgency = urgencyPrompts[Math.min(naggingLevel, 4)] || urgencyPrompts[4];
+  const urgency =
+    urgencyPrompts[Math.min(naggingLevel, 4)] || urgencyPrompts[4];
 
   const message = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
@@ -152,7 +164,7 @@ export async function generateNaggingMessage(
 
 export async function generateDailySummary(
   dumps: BrainDump[],
-  pendingTasks: Task[]
+  pendingTasks: Task[],
 ): Promise<string> {
   const client = getClient();
 
@@ -196,7 +208,7 @@ Please summarize this in a helpful, encouraging way.`,
 
 export function calculateNextNagDelay(
   naggingLevel: number,
-  isImportant: boolean
+  isImportant: boolean,
 ): number {
   // Base delays in minutes, escalating
   const baseDelays = [60, 120, 240, 360, 480]; // 1hr, 2hr, 4hr, 6hr, 8hr
@@ -207,4 +219,3 @@ export function calculateNextNagDelay(
   const delay = baseDelays[Math.min(naggingLevel, baseDelays.length - 1)];
   return Math.round(delay * multiplier);
 }
-

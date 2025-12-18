@@ -14,7 +14,8 @@ function getClient(): Redis {
 const TASK_KEY = (chatId: number, taskId: string) => `task:${chatId}:${taskId}`;
 const TASKS_SET_KEY = (chatId: number) => `tasks:${chatId}`;
 const DUMP_KEY = (chatId: number, dumpId: string) => `dump:${chatId}:${dumpId}`;
-const DUMPS_SET_KEY = (chatId: number, date: string) => `dumps:${chatId}:${date}`;
+const DUMPS_SET_KEY = (chatId: number, date: string) =>
+  `dumps:${chatId}:${date}`;
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -29,7 +30,7 @@ export async function createTask(
   chatId: number,
   content: string,
   isImportant: boolean,
-  delayMinutes: number
+  delayMinutes: number,
 ): Promise<Task> {
   const redis = getClient();
   const id = generateId();
@@ -54,7 +55,7 @@ export async function createTask(
 
 export async function getTask(
   chatId: number,
-  taskId: string
+  taskId: string,
 ): Promise<Task | null> {
   const redis = getClient();
   const data = await redis.get<string>(TASK_KEY(chatId, taskId));
@@ -69,7 +70,7 @@ export async function updateTask(task: Task): Promise<void> {
 
 export async function completeTask(
   chatId: number,
-  taskId: string
+  taskId: string,
 ): Promise<Task | null> {
   const task = await getTask(chatId, taskId);
   if (!task) return null;
@@ -77,6 +78,22 @@ export async function completeTask(
   task.status = "completed";
   await updateTask(task);
   await getClient().srem(TASKS_SET_KEY(chatId), taskId);
+
+  return task;
+}
+
+export async function deleteTask(
+  chatId: number,
+  taskId: string,
+): Promise<Task | null> {
+  const redis = getClient();
+  const task = await getTask(chatId, taskId);
+  if (!task) return null;
+
+  // Remove from the tasks set
+  await redis.srem(TASKS_SET_KEY(chatId), taskId);
+  // Delete the task data
+  await redis.del(TASK_KEY(chatId, taskId));
 
   return task;
 }
@@ -100,7 +117,7 @@ export async function getPendingTasks(chatId: number): Promise<Task[]> {
 
 export async function findTaskByDescription(
   chatId: number,
-  description?: string
+  description?: string,
 ): Promise<Task | null> {
   const tasks = await getPendingTasks(chatId);
   if (tasks.length === 0) return null;
@@ -112,9 +129,10 @@ export async function findTaskByDescription(
 
   // Try to find a matching task (fuzzy match)
   const normalizedDesc = description.toLowerCase();
-  const matchedTask = tasks.find((t) =>
-    t.content.toLowerCase().includes(normalizedDesc) ||
-    normalizedDesc.includes(t.content.toLowerCase())
+  const matchedTask = tasks.find(
+    (t) =>
+      t.content.toLowerCase().includes(normalizedDesc) ||
+      normalizedDesc.includes(t.content.toLowerCase()),
   );
 
   return matchedTask || tasks[tasks.length - 1];
@@ -123,7 +141,7 @@ export async function findTaskByDescription(
 // Brain dump operations
 export async function createBrainDump(
   chatId: number,
-  content: string
+  content: string,
 ): Promise<BrainDump> {
   const redis = getClient();
   const id = generateId();
@@ -148,7 +166,9 @@ export async function createBrainDump(
 export async function getTodaysDumps(chatId: number): Promise<BrainDump[]> {
   const redis = getClient();
   const todayKey = getTodayKey();
-  const dumpIds = await redis.smembers<string[]>(DUMPS_SET_KEY(chatId, todayKey));
+  const dumpIds = await redis.smembers<string[]>(
+    DUMPS_SET_KEY(chatId, todayKey),
+  );
 
   if (!dumpIds || dumpIds.length === 0) return [];
 
@@ -190,14 +210,14 @@ export interface ConversationMessage {
 }
 
 export async function getConversationHistory(
-  chatId: number
+  chatId: number,
 ): Promise<ConversationMessage[]> {
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
   const data = await redis.get<string>(key);
-  
+
   if (!data) return [];
-  
+
   try {
     return typeof data === "string" ? JSON.parse(data) : data;
   } catch {
@@ -208,24 +228,24 @@ export async function getConversationHistory(
 export async function addToConversation(
   chatId: number,
   userMessage: string,
-  assistantResponse: string
+  assistantResponse: string,
 ): Promise<void> {
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
-  
+
   // Get existing conversation
   const history = await getConversationHistory(chatId);
-  
+
   // Add new messages
   const now = Date.now();
   history.push(
     { role: "user", content: userMessage, timestamp: now },
-    { role: "assistant", content: assistantResponse, timestamp: now }
+    { role: "assistant", content: assistantResponse, timestamp: now },
   );
-  
+
   // Keep only the last N message pairs (N*2 messages)
   const trimmed = history.slice(-(MAX_CONVERSATION_LENGTH * 2));
-  
+
   // Save with TTL
   await redis.set(key, JSON.stringify(trimmed), { ex: CONVERSATION_TTL });
 }
@@ -234,4 +254,3 @@ export async function clearConversation(chatId: number): Promise<void> {
   const redis = getClient();
   await redis.del(CONVERSATION_KEY(chatId));
 }
-

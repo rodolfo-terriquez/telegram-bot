@@ -48,6 +48,7 @@ export type Intent =
   | ReminderIntent
   | BrainDumpIntent
   | MarkDoneIntent
+  | DeleteReminderIntent
   | ListTasksIntent
   | ConversationIntent;
 
@@ -65,6 +66,11 @@ export interface BrainDumpIntent {
 
 export interface MarkDoneIntent {
   type: "mark_done";
+  taskDescription?: string;
+}
+
+export interface DeleteReminderIntent {
+  type: "delete_reminder";
   taskDescription?: string;
 }
 
@@ -103,4 +109,3 @@ export interface NotificationPayload {
   taskId: string;
   type: "reminder" | "nag" | "daily_summary";
 }
-

@@ -4,11 +4,11 @@ import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { parseIntent, calculateNextNagDelay } from "../lib/claude.js";
 import * as redis from "../lib/redis.js";
-import { scheduleReminder } from "../lib/qstash.js";
+import { scheduleReminder, cancelScheduledMessage } from "../lib/qstash.js";
 
 export default async function handler(
   req: VercelRequest,
-  res: VercelResponse
+  res: VercelResponse,
 ): Promise<void> {
   // Only accept POST requests
   if (req.method !== "POST") {
@@ -31,7 +31,9 @@ export default async function handler(
     // Check if user is allowed (if ALLOWED_USERS is set)
     const allowedUsers = process.env.ALLOWED_USERS;
     if (allowedUsers) {
-      const allowed = allowedUsers.split(",").map((u) => u.trim().toLowerCase());
+      const allowed = allowedUsers
+        .split(",")
+        .map((u) => u.trim().toLowerCase());
       const userId = message.from?.id?.toString();
       const username = message.from?.username?.toLowerCase();
 
@@ -43,7 +45,7 @@ export default async function handler(
         console.log(`Unauthorized user: ${username} (${userId})`);
         await telegram.sendMessage(
           chatId,
-          "Sorry, this bot is private. Contact the owner for access."
+          "Sorry, this bot is private. Contact the owner for access.",
         );
         res.status(200).json({ ok: true });
         return;
@@ -57,7 +59,10 @@ export default async function handler(
 
     // Handle voice messages
     if (message.voice) {
-      await telegram.sendMessage(chatId, "🎤 Transcribing your voice message...");
+      await telegram.sendMessage(
+        chatId,
+        "🎤 Transcribing your voice message...",
+      );
 
       try {
         const filePath = await telegram.getFilePath(message.voice.file_id);
@@ -70,7 +75,7 @@ export default async function handler(
         console.error("Transcription error:", error);
         await telegram.sendMessage(
           chatId,
-          "Sorry, I couldn't transcribe that voice message. Please try again or send a text message."
+          "Sorry, I couldn't transcribe that voice message. Please try again or send a text message.",
         );
         res.status(200).json({ ok: true });
         return;
@@ -104,7 +109,10 @@ export default async function handler(
   }
 }
 
-async function handleIntent(chatId: number, intent: Intent): Promise<string | null> {
+async function handleIntent(
+  chatId: number,
+  intent: Intent,
+): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
       return await handleReminder(chatId, intent);
@@ -114,6 +122,9 @@ async function handleIntent(chatId: number, intent: Intent): Promise<string | nu
 
     case "mark_done":
       return await handleMarkDone(chatId, intent);
+
+    case "delete_reminder":
+      return await handleDeleteReminder(chatId, intent);
 
     case "list_tasks":
       return await handleListTasks(chatId);
@@ -126,24 +137,31 @@ async function handleIntent(chatId: number, intent: Intent): Promise<string | nu
 
 async function handleReminder(
   chatId: number,
-  intent: { type: "reminder"; task: string; delayMinutes: number; isImportant: boolean }
+  intent: {
+    type: "reminder";
+    task: string;
+    delayMinutes: number;
+    isImportant: boolean;
+  },
 ): Promise<string> {
   // Create the task in Redis
   const task = await redis.createTask(
     chatId,
     intent.task,
     intent.isImportant,
-    intent.delayMinutes
+    intent.delayMinutes,
   );
 
   // Schedule the reminder via QStash
   try {
-    console.log(`Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`);
+    console.log(
+      `Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`,
+    );
     const messageId = await scheduleReminder(
       chatId,
       task.id,
       intent.delayMinutes,
-      false
+      false,
     );
     console.log(`QStash message scheduled: ${messageId}`);
 
@@ -157,7 +175,9 @@ async function handleReminder(
 
   // Format time for user
   const timeStr = formatDelay(intent.delayMinutes);
-  const importantStr = intent.isImportant ? " (I'll nag you until it's done!)" : "";
+  const importantStr = intent.isImportant
+    ? " (I'll nag you until it's done!)"
+    : "";
 
   const response = `✅ Got it! I'll remind you to *${intent.task}* in ${timeStr}${importantStr}`;
   await telegram.sendMessage(chatId, response);
@@ -166,7 +186,7 @@ async function handleReminder(
 
 async function handleBrainDump(
   chatId: number,
-  intent: { type: "brain_dump"; content: string }
+  intent: { type: "brain_dump"; content: string },
 ): Promise<string> {
   await redis.createBrainDump(chatId, intent.content);
 
@@ -177,13 +197,17 @@ async function handleBrainDump(
 
 async function handleMarkDone(
   chatId: number,
-  intent: { type: "mark_done"; taskDescription?: string }
+  intent: { type: "mark_done"; taskDescription?: string },
 ): Promise<string> {
   // Find the task
-  const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
+  const task = await redis.findTaskByDescription(
+    chatId,
+    intent.taskDescription,
+  );
 
   if (!task) {
-    const response = "I couldn't find a pending task to mark as done. You can say 'list tasks' to see your pending items.";
+    const response =
+      "I couldn't find a pending task to mark as done. You can say 'list tasks' to see your pending items.";
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -196,11 +220,42 @@ async function handleMarkDone(
   return response;
 }
 
+async function handleDeleteReminder(
+  chatId: number,
+  intent: { type: "delete_reminder"; taskDescription?: string },
+): Promise<string> {
+  // Find the task
+  const task = await redis.findTaskByDescription(
+    chatId,
+    intent.taskDescription,
+  );
+
+  if (!task) {
+    const response =
+      "I couldn't find a pending reminder to delete. You can say 'list tasks' to see your pending items.";
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // Cancel the QStash scheduled message if it exists
+  if (task.qstashMessageId) {
+    await cancelScheduledMessage(task.qstashMessageId);
+  }
+
+  // Delete the task from Redis
+  await redis.deleteTask(chatId, task.id);
+
+  const response = `🗑️ Deleted reminder: *${task.content}*`;
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
 async function handleListTasks(chatId: number): Promise<string> {
   const tasks = await redis.getPendingTasks(chatId);
 
   if (tasks.length === 0) {
-    const response = "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘";
+    const response =
+      "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘";
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -254,4 +309,3 @@ function formatFutureTime(timestamp: number): string {
   const days = Math.floor(hours / 24);
   return `in ${days} day${days === 1 ? "" : "s"}`;
 }
-
