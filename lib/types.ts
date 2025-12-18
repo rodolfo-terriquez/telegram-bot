@@ -46,9 +46,11 @@ export interface TelegramFile {
 // Intent types from Claude
 export type Intent =
   | ReminderIntent
+  | MultipleRemindersIntent
   | BrainDumpIntent
   | MarkDoneIntent
   | CancelTaskIntent
+  | CancelMultipleTasksIntent
   | ListTasksIntent
   | ConversationIntent
   | CheckinResponseIntent
@@ -59,6 +61,17 @@ export interface ReminderIntent {
   task: string;
   delayMinutes: number;
   isImportant: boolean;
+}
+
+export interface ReminderItem {
+  task: string;
+  delayMinutes: number;
+  isImportant: boolean;
+}
+
+export interface MultipleRemindersIntent {
+  type: "multiple_reminders";
+  reminders: ReminderItem[];
 }
 
 export interface BrainDumpIntent {
@@ -74,6 +87,11 @@ export interface MarkDoneIntent {
 export interface CancelTaskIntent {
   type: "cancel_task";
   taskDescription?: string;
+}
+
+export interface CancelMultipleTasksIntent {
+  type: "cancel_multiple_tasks";
+  taskDescriptions: string[];
 }
 
 export interface ListTasksIntent {

@@ -153,6 +153,34 @@ export async function findTaskByDescription(
   return matchedTask || tasks[tasks.length - 1];
 }
 
+export async function findTasksByDescriptions(
+  chatId: number,
+  descriptions: string[],
+): Promise<Task[]> {
+  const tasks = await getPendingTasks(chatId);
+  if (tasks.length === 0) return [];
+
+  const matchedTasks: Task[] = [];
+  const usedTaskIds = new Set<string>();
+
+  for (const description of descriptions) {
+    const normalizedDesc = description.toLowerCase();
+    const matchedTask = tasks.find(
+      (t) =>
+        !usedTaskIds.has(t.id) &&
+        (t.content.toLowerCase().includes(normalizedDesc) ||
+          normalizedDesc.includes(t.content.toLowerCase())),
+    );
+
+    if (matchedTask) {
+      matchedTasks.push(matchedTask);
+      usedTaskIds.add(matchedTask.id);
+    }
+  }
+
+  return matchedTasks;
+}
+
 // Brain dump operations
 export async function createBrainDump(
   chatId: number,

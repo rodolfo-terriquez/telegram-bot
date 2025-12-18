@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { TelegramUpdate, Intent } from "../lib/types.js";
+import type { TelegramUpdate, Intent, ReminderItem } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { parseIntent } from "../lib/claude.js";
@@ -134,6 +134,9 @@ async function handleIntent(
     case "reminder":
       return await handleReminder(chatId, intent);
 
+    case "multiple_reminders":
+      return await handleMultipleReminders(chatId, intent);
+
     case "brain_dump":
       return await handleBrainDump(chatId, intent);
 
@@ -142,6 +145,9 @@ async function handleIntent(
 
     case "cancel_task":
       return await handleCancelTask(chatId, intent);
+
+    case "cancel_multiple_tasks":
+      return await handleCancelMultipleTasks(chatId, intent);
 
     case "list_tasks":
       return await handleListTasks(chatId);
@@ -203,6 +209,45 @@ async function handleReminder(
     : "";
 
   const response = `✅ Got it! I'll remind you to *${intent.task}* in ${timeStr}${importantStr}`;
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleMultipleReminders(
+  chatId: number,
+  intent: { type: "multiple_reminders"; reminders: ReminderItem[] },
+): Promise<string> {
+  const createdTasks: string[] = [];
+
+  for (const reminder of intent.reminders) {
+    // Create the task in Redis
+    const task = await redis.createTask(
+      chatId,
+      reminder.task,
+      reminder.isImportant,
+      reminder.delayMinutes,
+    );
+
+    // Schedule the reminder via QStash
+    try {
+      const messageId = await scheduleReminder(
+        chatId,
+        task.id,
+        reminder.delayMinutes,
+        false,
+      );
+      task.qstashMessageId = messageId;
+      await redis.updateTask(task);
+    } catch (error) {
+      console.error("Failed to schedule QStash reminder:", error);
+    }
+
+    const timeStr = formatDelay(reminder.delayMinutes);
+    const importantStr = reminder.isImportant ? " ⚡" : "";
+    createdTasks.push(`• *${reminder.task}* in ${timeStr}${importantStr}`);
+  }
+
+  const response = `✅ Created ${intent.reminders.length} reminders:\n\n${createdTasks.join("\n")}`;
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -274,6 +319,40 @@ async function handleCancelTask(
   await redis.deleteTask(chatId, task.id);
 
   const response = `✅ Cancelled *${task.content}*. No worries, priorities change!`;
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleCancelMultipleTasks(
+  chatId: number,
+  intent: { type: "cancel_multiple_tasks"; taskDescriptions: string[] },
+): Promise<string> {
+  const tasks = await redis.findTasksByDescriptions(
+    chatId,
+    intent.taskDescriptions,
+  );
+
+  if (tasks.length === 0) {
+    const response =
+      "I couldn't find any matching tasks to cancel. You can say 'list tasks' to see your pending items.";
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  const cancelledTasks: string[] = [];
+
+  for (const task of tasks) {
+    // Cancel any scheduled reminder/nag for this task
+    if (task.qstashMessageId) {
+      await cancelScheduledMessage(task.qstashMessageId);
+    }
+
+    // Delete the task
+    await redis.deleteTask(chatId, task.id);
+    cancelledTasks.push(`• *${task.content}*`);
+  }
+
+  const response = `✅ Cancelled ${tasks.length} task${tasks.length > 1 ? "s" : ""}:\n\n${cancelledTasks.join("\n")}\n\nNo worries, priorities change!`;
   await telegram.sendMessage(chatId, response);
   return response;
 }

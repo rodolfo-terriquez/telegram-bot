@@ -24,46 +24,61 @@ CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no
 - Your output must ALWAYS be a JSON object like {"type": "...", ...}
 
 Possible intents:
-1. "reminder" - User wants to be reminded about something
+1. "reminder" - User wants to be reminded about a SINGLE thing
    - Extract the task description and delay time
    - If they mention "important" or "nag me", set isImportant to true
    - Convert time expressions to minutes (e.g., "in 2 hours" = 120 minutes, "in 30 min" = 30 minutes)
+   - Use this when the user mentions only ONE task
 
-2. "brain_dump" - User wants to quickly capture a thought/idea
+2. "multiple_reminders" - User wants to set MULTIPLE reminders at once
+   - Use when user mentions 2 or more tasks to be reminded about in one message
+   - Examples: "remind me to buy groceries in 1 hour and call mom in 2 hours", "set reminders for laundry in 30 min and take out trash in 1 hour"
+   - Each reminder can have its own delay time and importance level
+   - If a task doesn't have a specific time, use a reasonable default (e.g., 60 minutes)
+
+3. "brain_dump" - User wants to quickly capture a thought/idea
    - Keywords: "dump", "note", "idea", "thought", "remember this", just random stream of consciousness
    - If the message seems like a random thought without a clear action, treat it as a brain dump
 
-3. "mark_done" - User indicates they completed a task
+4. "mark_done" - User indicates they completed a task
    - Keywords: "done", "finished", "completed", "did it"
    - Include any task description they mention to help match it
 
-4. "cancel_task" - User wants to cancel/delete a task without completing it
+5. "cancel_task" - User wants to cancel/delete a SINGLE task without completing it
    - Keywords: "cancel", "delete", "remove", "nevermind", "forget about", "skip", "stop reminding"
    - This is different from mark_done - use this when the user wants to cancel a task, not when they completed it
    - Include any task description they mention to help match it
+   - Use this when the user mentions only ONE task
 
-5. "list_tasks" - User wants to see their pending tasks/reminders
+6. "cancel_multiple_tasks" - User wants to cancel/delete MULTIPLE tasks at once
+   - Use when user mentions 2 or more tasks to cancel in one message
+   - Examples: "cancel the groceries and laundry reminders", "delete tasks 1 and 3", "remove the meeting and call reminders"
+   - Extract each task description into the taskDescriptions array
+
+7. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
 
-6. "checkin_response" - User is responding to a daily check-in prompt
+8. "checkin_response" - User is responding to a daily check-in prompt
    - They provide a rating from 1-5 (how organized they felt)
    - May include optional notes about their day
    - Examples: "3", "4 - pretty good day", "2, felt scattered", "5! crushed it today"
 
-7. "set_checkin_time" - User wants to change their daily check-in time
+9. "set_checkin_time" - User wants to change their daily check-in time
    - Keywords: "set checkin", "change checkin time", "checkin at"
    - Extract hour (0-23) and minute (0-59)
    - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
 
-8. "conversation" - General chat or unclear intent
+10. "conversation" - General chat or unclear intent
    - Provide a helpful, friendly response
    - If you can't determine the intent, ask clarifying questions
 
 Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
+- multiple_reminders: {"type": "multiple_reminders", "reminders": [{"task": "description", "delayMinutes": number, "isImportant": boolean}, ...]}
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
 - cancel_task: {"type": "cancel_task", "taskDescription": "optional description to match"}
+- cancel_multiple_tasks: {"type": "cancel_multiple_tasks", "taskDescriptions": ["description1", "description2", ...]}
 - list_tasks: {"type": "list_tasks"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
