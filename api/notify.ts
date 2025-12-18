@@ -165,33 +165,19 @@ async function handleDailyCheckin(payload: NotificationPayload): Promise<void> {
 async function handleWeeklySummary(payload: NotificationPayload): Promise<void> {
   const { chatId } = payload;
 
-  // Get weekly check-ins
-  const checkIns = await redis.getWeeklyCheckIns(chatId);
-
-  // Get brain dumps from the last 7 days
-  const dumps: Awaited<ReturnType<typeof redis.getTodaysDumps>> = [];
-  const today = new Date();
-  for (let i = 0; i < 7; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    const dateKey = date.toISOString().split("T")[0];
-    // We need to get dumps for each day - using a simple approach
-    const dayDumps = await redis.getTodaysDumps(chatId);
-    // Note: getTodaysDumps only gets today's dumps, but we're iterating for structure
-    // In practice, we'd need a getDumpsByDate function, but for now we'll just use today's
-    if (i === 0) {
-      dumps.push(...dayDumps);
-    }
-  }
+  // Get weekly check-ins and brain dumps
+  const [checkIns, dumps, completedTaskCount] = await Promise.all([
+    redis.getWeeklyCheckIns(chatId),
+    redis.getWeeklyDumps(chatId),
+    redis.getWeeklyCompletedTaskCount(chatId),
+  ]);
 
   // Only send if there's any data
-  if (checkIns.length === 0) {
+  if (checkIns.length === 0 && dumps.length === 0 && completedTaskCount === 0) {
     return;
   }
 
   // Generate weekly insights
-  const tasks = await redis.getPendingTasks(chatId);
-  const completedTaskCount = 0; // We'd need to track completed tasks for accurate count
   const insights = await generateWeeklyInsights(checkIns, dumps, completedTaskCount);
 
   await telegram.sendMessage(chatId, insights);

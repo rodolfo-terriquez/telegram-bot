@@ -48,6 +48,7 @@ export type Intent =
   | ReminderIntent
   | BrainDumpIntent
   | MarkDoneIntent
+  | CancelTaskIntent
   | ListTasksIntent
   | ConversationIntent
   | CheckinResponseIntent
@@ -67,6 +68,11 @@ export interface BrainDumpIntent {
 
 export interface MarkDoneIntent {
   type: "mark_done";
+  taskDescription?: string;
+}
+
+export interface CancelTaskIntent {
+  type: "cancel_task";
   taskDescription?: string;
 }
 
@@ -134,4 +140,5 @@ export interface UserPreferences {
   checkinTime: string; // "HH:MM" format, default "20:00"
   checkinScheduleId?: string;
   weeklySummaryScheduleId?: string;
+  dailySummaryScheduleId?: string;
 }

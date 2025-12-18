@@ -8,7 +8,9 @@ import {
   scheduleReminder,
   scheduleDailyCheckin,
   scheduleWeeklySummary,
+  scheduleDailySummary,
   deleteSchedule,
+  cancelScheduledMessage,
 } from "../lib/qstash.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
@@ -51,8 +53,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       }
     }
 
-    // Register this chat for daily summaries
-    await redis.registerChat(chatId);
+    // Register this chat and set up default schedules for new users
+    const isNewUser = await redis.registerChat(chatId);
+    if (isNewUser) {
+      await setupDefaultSchedules(chatId);
+    }
 
     let userText: string;
 
@@ -84,11 +89,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    // Get conversation history for context
-    const conversationHistory = await redis.getConversationHistory(chatId);
+    // Get conversation history and check-in state for context
+    const [conversationHistory, isAwaitingCheckin] = await Promise.all([
+      redis.getConversationHistory(chatId),
+      redis.isAwaitingCheckin(chatId),
+    ]);
 
     // Parse intent using Claude (with conversation context)
-    const intent = await parseIntent(userText, conversationHistory);
+    const intent = await parseIntent(userText, conversationHistory, isAwaitingCheckin);
 
     // Handle the intent
     const response = await handleIntent(chatId, intent);
@@ -115,6 +123,9 @@ async function handleIntent(chatId: number, intent: Intent): Promise<string | nu
 
     case "mark_done":
       return await handleMarkDone(chatId, intent);
+
+    case "cancel_task":
+      return await handleCancelTask(chatId, intent);
 
     case "list_tasks":
       return await handleListTasks(chatId);
@@ -186,10 +197,42 @@ async function handleMarkDone(
     return response;
   }
 
+  // Cancel any scheduled reminder/nag for this task
+  if (task.qstashMessageId) {
+    await cancelScheduledMessage(task.qstashMessageId);
+  }
+
   // Complete the task
   await redis.completeTask(chatId, task.id);
 
   const response = `🎉 Awesome! Marked *${task.content}* as done. Great job!`;
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleCancelTask(
+  chatId: number,
+  intent: { type: "cancel_task"; taskDescription?: string },
+): Promise<string> {
+  // Find the task
+  const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
+
+  if (!task) {
+    const response =
+      "I couldn't find a pending task to cancel. You can say 'list tasks' to see your pending items.";
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // Cancel any scheduled reminder/nag for this task
+  if (task.qstashMessageId) {
+    await cancelScheduledMessage(task.qstashMessageId);
+  }
+
+  // Delete the task
+  await redis.deleteTask(chatId, task.id);
+
+  const response = `✅ Cancelled *${task.content}*. No worries, priorities change!`;
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -285,18 +328,23 @@ async function handleSetCheckinTime(
   if (existingPrefs?.weeklySummaryScheduleId) {
     await deleteSchedule(existingPrefs.weeklySummaryScheduleId);
   }
+  if (existingPrefs?.dailySummaryScheduleId) {
+    await deleteSchedule(existingPrefs.dailySummaryScheduleId);
+  }
 
-  // Create new cron expression (minute hour * * *)
+  // Create new cron expressions (minute hour * * *)
   const cronExpression = `${minute} ${hour} * * *`;
   const weeklyCron = `${minute} ${hour} * * 0`; // Same time on Sundays
 
-  // Schedule new check-in and weekly summary
+  // Schedule new check-in, daily summary, and weekly summary
   const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
+  const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
   const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
 
-  // Save preferences with schedule IDs
+  // Save preferences with all schedule IDs
   const prefs = await redis.setCheckinTime(chatId, hour, minute, checkinScheduleId);
   prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
+  prefs.dailySummaryScheduleId = dailySummaryScheduleId;
   await redis.saveUserPreferences(prefs);
 
   // Format time for display
@@ -305,7 +353,35 @@ async function handleSetCheckinTime(
   const displayMinute = minute.toString().padStart(2, "0");
   const timeStr = `${displayHour}:${displayMinute} ${period}`;
 
-  const response = `Done! I'll check in with you daily at ${timeStr}. You'll also get a weekly summary on Sundays at the same time.`;
+  const response = `Done! I'll check in with you daily at ${timeStr}. You'll also get a daily summary and a weekly summary on Sundays at the same time.`;
   await telegram.sendMessage(chatId, response);
   return response;
+}
+
+async function setupDefaultSchedules(chatId: number): Promise<void> {
+  // Default check-in time: 8 PM (20:00)
+  const defaultHour = 20;
+  const defaultMinute = 0;
+
+  try {
+    // Create cron expressions
+    const cronExpression = `${defaultMinute} ${defaultHour} * * *`;
+    const weeklyCron = `${defaultMinute} ${defaultHour} * * 0`; // Sundays
+
+    // Schedule all recurring notifications
+    const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
+    const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
+    const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
+
+    // Save preferences
+    const prefs = await redis.setCheckinTime(chatId, defaultHour, defaultMinute, checkinScheduleId);
+    prefs.dailySummaryScheduleId = dailySummaryScheduleId;
+    prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
+    await redis.saveUserPreferences(prefs);
+
+    console.log(`Set up default schedules for new user ${chatId}`);
+  } catch (error) {
+    console.error(`Failed to set up default schedules for ${chatId}:`, error);
+    // Don't throw - this is a nice-to-have, not critical
+  }
 }

@@ -34,20 +34,24 @@ Possible intents:
    - Keywords: "done", "finished", "completed", "did it"
    - Include any task description they mention to help match it
 
-4. "list_tasks" - User wants to see their pending tasks/reminders
+4. "cancel_task" - User wants to cancel/delete a task without completing it
+   - Keywords: "cancel", "delete", "remove", "nevermind", "forget about", "skip"
+   - Include any task description they mention to help match it
+
+5. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
 
-5. "checkin_response" - User is responding to a daily check-in prompt
+6. "checkin_response" - User is responding to a daily check-in prompt
    - They provide a rating from 1-5 (how organized they felt)
    - May include optional notes about their day
    - Examples: "3", "4 - pretty good day", "2, felt scattered", "5! crushed it today"
 
-6. "set_checkin_time" - User wants to change their daily check-in time
+7. "set_checkin_time" - User wants to change their daily check-in time
    - Keywords: "set checkin", "change checkin time", "checkin at"
    - Extract hour (0-23) and minute (0-59)
    - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
 
-7. "conversation" - General chat or unclear intent
+8. "conversation" - General chat or unclear intent
    - Provide a helpful, friendly response
    - If you can't determine the intent, ask clarifying questions
 
@@ -55,6 +59,7 @@ Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
+- cancel_task: {"type": "cancel_task", "taskDescription": "optional description to match"}
 - list_tasks: {"type": "list_tasks"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
@@ -65,25 +70,26 @@ Be lenient and helpful. ADHD users may send fragmented or unclear messages - try
 export async function parseIntent(
   userMessage: string,
   conversationHistory: ConversationMessage[] = [],
+  isAwaitingCheckin: boolean = false,
 ): Promise<Intent> {
   const client = getClient();
 
   // Build messages array with conversation history
   const messages: MessageParam[] = [];
 
-  // Add conversation history (skip the JSON responses, just include user context)
+  // Add conversation history - we store the user-facing responses, not JSON
   for (const msg of conversationHistory) {
-    if (msg.role === "user") {
-      messages.push({ role: "user", content: msg.content });
-    } else {
-      // For assistant messages, add a simplified version to maintain context
-      // without confusing the model with JSON responses
-      messages.push({ role: "assistant", content: "[Previous response processed]" });
-    }
+    messages.push({ role: msg.role, content: msg.content });
+  }
+
+  // Build the current message with context
+  let contextualMessage = userMessage;
+  if (isAwaitingCheckin) {
+    contextualMessage = `[CONTEXT: The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.]\n\nUser message: ${userMessage}`;
   }
 
   // Add current message
-  messages.push({ role: "user", content: userMessage });
+  messages.push({ role: "user", content: contextualMessage });
 
   const message = await client.messages.create({
     model: "claude-haiku-4-5-20251001",
