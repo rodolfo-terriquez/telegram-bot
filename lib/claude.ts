@@ -18,7 +18,10 @@ function getClient(): Anthropic {
 
 const SYSTEM_PROMPT = `You are an ADHD support assistant integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
 
-You MUST respond with valid JSON only. No markdown, no explanation, just the JSON object.
+CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no emojis, just the raw JSON object.
+- Do NOT mimic the format of previous responses shown in conversation history
+- Previous assistant responses shown as "[I responded to the user with: ...]" are for CONTEXT ONLY
+- Your output must ALWAYS be a JSON object like {"type": "...", ...}
 
 Possible intents:
 1. "reminder" - User wants to be reminded about something
@@ -77,9 +80,19 @@ export async function parseIntent(
   // Build messages array with conversation history
   const messages: MessageParam[] = [];
 
-  // Add conversation history - we store the user-facing responses, not JSON
+  // Add conversation history with context markers
+  // We need to distinguish between user-facing responses (for context) and the JSON format Claude should output
   for (const msg of conversationHistory) {
-    messages.push({ role: msg.role, content: msg.content });
+    if (msg.role === "user") {
+      messages.push({ role: "user", content: msg.content });
+    } else {
+      // Wrap assistant messages to indicate they were user-facing responses
+      // This prevents Claude from mimicking the response format instead of outputting JSON
+      messages.push({
+        role: "assistant",
+        content: `[I responded to the user with: "${msg.content}"]`,
+      });
+    }
   }
 
   // Build the current message with context
