@@ -49,7 +49,9 @@ export type Intent =
   | BrainDumpIntent
   | MarkDoneIntent
   | ListTasksIntent
-  | ConversationIntent;
+  | ConversationIntent
+  | CheckinResponseIntent
+  | SetCheckinTimeIntent;
 
 export interface ReminderIntent {
   type: "reminder";
@@ -77,6 +79,18 @@ export interface ConversationIntent {
   response: string;
 }
 
+export interface CheckinResponseIntent {
+  type: "checkin_response";
+  rating: number;
+  notes?: string;
+}
+
+export interface SetCheckinTimeIntent {
+  type: "set_checkin_time";
+  hour: number;
+  minute: number;
+}
+
 // Data models for Redis
 export interface Task {
   id: string;
@@ -101,6 +115,23 @@ export interface BrainDump {
 export interface NotificationPayload {
   chatId: number;
   taskId: string;
-  type: "reminder" | "nag" | "daily_summary";
+  type: "reminder" | "nag" | "daily_summary" | "daily_checkin" | "weekly_summary";
 }
 
+// Daily check-in data
+export interface CheckIn {
+  id: string;
+  chatId: number;
+  date: string; // YYYY-MM-DD
+  rating: number; // 1-5 scale
+  notes?: string;
+  createdAt: number;
+}
+
+// User preferences for check-in scheduling
+export interface UserPreferences {
+  chatId: number;
+  checkinTime: string; // "HH:MM" format, default "20:00"
+  checkinScheduleId?: string;
+  weeklySummaryScheduleId?: string;
+}

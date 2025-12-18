@@ -1,5 +1,5 @@
 import { Redis } from "@upstash/redis";
-import type { Task, BrainDump } from "./types.js";
+import type { Task, BrainDump, CheckIn, UserPreferences } from "./types.js";
 
 let redisClient: Redis | null = null;
 
@@ -15,6 +15,10 @@ const TASK_KEY = (chatId: number, taskId: string) => `task:${chatId}:${taskId}`;
 const TASKS_SET_KEY = (chatId: number) => `tasks:${chatId}`;
 const DUMP_KEY = (chatId: number, dumpId: string) => `dump:${chatId}:${dumpId}`;
 const DUMPS_SET_KEY = (chatId: number, date: string) => `dumps:${chatId}:${date}`;
+const CHECKIN_KEY = (chatId: number, date: string) => `checkin:${chatId}:${date}`;
+const CHECKINS_SET_KEY = (chatId: number) => `checkins:${chatId}`;
+const USER_PREFS_KEY = (chatId: number) => `user_prefs:${chatId}`;
+const AWAITING_CHECKIN_KEY = (chatId: number) => `awaiting_checkin:${chatId}`;
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -29,7 +33,7 @@ export async function createTask(
   chatId: number,
   content: string,
   isImportant: boolean,
-  delayMinutes: number
+  delayMinutes: number,
 ): Promise<Task> {
   const redis = getClient();
   const id = generateId();
@@ -52,10 +56,7 @@ export async function createTask(
   return task;
 }
 
-export async function getTask(
-  chatId: number,
-  taskId: string
-): Promise<Task | null> {
+export async function getTask(chatId: number, taskId: string): Promise<Task | null> {
   const redis = getClient();
   const data = await redis.get<string>(TASK_KEY(chatId, taskId));
   if (!data) return null;
@@ -67,10 +68,7 @@ export async function updateTask(task: Task): Promise<void> {
   await redis.set(TASK_KEY(task.chatId, task.id), JSON.stringify(task));
 }
 
-export async function completeTask(
-  chatId: number,
-  taskId: string
-): Promise<Task | null> {
+export async function completeTask(chatId: number, taskId: string): Promise<Task | null> {
   const task = await getTask(chatId, taskId);
   if (!task) return null;
 
@@ -100,7 +98,7 @@ export async function getPendingTasks(chatId: number): Promise<Task[]> {
 
 export async function findTaskByDescription(
   chatId: number,
-  description?: string
+  description?: string,
 ): Promise<Task | null> {
   const tasks = await getPendingTasks(chatId);
   if (tasks.length === 0) return null;
@@ -112,19 +110,17 @@ export async function findTaskByDescription(
 
   // Try to find a matching task (fuzzy match)
   const normalizedDesc = description.toLowerCase();
-  const matchedTask = tasks.find((t) =>
-    t.content.toLowerCase().includes(normalizedDesc) ||
-    normalizedDesc.includes(t.content.toLowerCase())
+  const matchedTask = tasks.find(
+    (t) =>
+      t.content.toLowerCase().includes(normalizedDesc) ||
+      normalizedDesc.includes(t.content.toLowerCase()),
   );
 
   return matchedTask || tasks[tasks.length - 1];
 }
 
 // Brain dump operations
-export async function createBrainDump(
-  chatId: number,
-  content: string
-): Promise<BrainDump> {
+export async function createBrainDump(chatId: number, content: string): Promise<BrainDump> {
   const redis = getClient();
   const id = generateId();
   const now = Date.now();
@@ -189,15 +185,13 @@ export interface ConversationMessage {
   timestamp: number;
 }
 
-export async function getConversationHistory(
-  chatId: number
-): Promise<ConversationMessage[]> {
+export async function getConversationHistory(chatId: number): Promise<ConversationMessage[]> {
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
   const data = await redis.get<string>(key);
-  
+
   if (!data) return [];
-  
+
   try {
     return typeof data === "string" ? JSON.parse(data) : data;
   } catch {
@@ -208,24 +202,24 @@ export async function getConversationHistory(
 export async function addToConversation(
   chatId: number,
   userMessage: string,
-  assistantResponse: string
+  assistantResponse: string,
 ): Promise<void> {
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
-  
+
   // Get existing conversation
   const history = await getConversationHistory(chatId);
-  
+
   // Add new messages
   const now = Date.now();
   history.push(
     { role: "user", content: userMessage, timestamp: now },
-    { role: "assistant", content: assistantResponse, timestamp: now }
+    { role: "assistant", content: assistantResponse, timestamp: now },
   );
-  
+
   // Keep only the last N message pairs (N*2 messages)
   const trimmed = history.slice(-(MAX_CONVERSATION_LENGTH * 2));
-  
+
   // Save with TTL
   await redis.set(key, JSON.stringify(trimmed), { ex: CONVERSATION_TTL });
 }
@@ -235,3 +229,103 @@ export async function clearConversation(chatId: number): Promise<void> {
   await redis.del(CONVERSATION_KEY(chatId));
 }
 
+// Check-in operations
+export async function saveCheckIn(
+  chatId: number,
+  rating: number,
+  notes?: string,
+): Promise<CheckIn> {
+  const redis = getClient();
+  const id = generateId();
+  const now = Date.now();
+  const todayKey = getTodayKey();
+
+  const checkIn: CheckIn = {
+    id,
+    chatId,
+    date: todayKey,
+    rating,
+    notes,
+    createdAt: now,
+  };
+
+  await redis.set(CHECKIN_KEY(chatId, todayKey), JSON.stringify(checkIn));
+  await redis.sadd(CHECKINS_SET_KEY(chatId), todayKey);
+  // Set expiration for check-ins (90 days)
+  await redis.expire(CHECKIN_KEY(chatId, todayKey), 90 * 24 * 60 * 60);
+
+  return checkIn;
+}
+
+export async function getCheckIn(chatId: number, date: string): Promise<CheckIn | null> {
+  const redis = getClient();
+  const data = await redis.get<string>(CHECKIN_KEY(chatId, date));
+  if (!data) return null;
+  return typeof data === "string" ? JSON.parse(data) : data;
+}
+
+export async function getWeeklyCheckIns(chatId: number): Promise<CheckIn[]> {
+  const checkIns: CheckIn[] = [];
+  const today = new Date();
+
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - i);
+    const dateKey = date.toISOString().split("T")[0];
+    const checkIn = await getCheckIn(chatId, dateKey);
+    if (checkIn) {
+      checkIns.push(checkIn);
+    }
+  }
+
+  return checkIns.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// User preferences operations
+export async function getUserPreferences(chatId: number): Promise<UserPreferences | null> {
+  const redis = getClient();
+  const data = await redis.get<string>(USER_PREFS_KEY(chatId));
+  if (!data) return null;
+  return typeof data === "string" ? JSON.parse(data) : data;
+}
+
+export async function saveUserPreferences(prefs: UserPreferences): Promise<void> {
+  const redis = getClient();
+  await redis.set(USER_PREFS_KEY(prefs.chatId), JSON.stringify(prefs));
+}
+
+export async function setCheckinTime(
+  chatId: number,
+  hour: number,
+  minute: number,
+  scheduleId?: string,
+): Promise<UserPreferences> {
+  const existing = await getUserPreferences(chatId);
+  const prefs: UserPreferences = {
+    chatId,
+    checkinTime: `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`,
+    checkinScheduleId: scheduleId || existing?.checkinScheduleId,
+    weeklySummaryScheduleId: existing?.weeklySummaryScheduleId,
+  };
+  await saveUserPreferences(prefs);
+  return prefs;
+}
+
+// Awaiting check-in state
+const AWAITING_CHECKIN_TTL = 60 * 60; // 1 hour
+
+export async function markAwaitingCheckin(chatId: number): Promise<void> {
+  const redis = getClient();
+  await redis.set(AWAITING_CHECKIN_KEY(chatId), "1", { ex: AWAITING_CHECKIN_TTL });
+}
+
+export async function isAwaitingCheckin(chatId: number): Promise<boolean> {
+  const redis = getClient();
+  const value = await redis.get(AWAITING_CHECKIN_KEY(chatId));
+  return value === 1 || value === "1";
+}
+
+export async function clearAwaitingCheckin(chatId: number): Promise<void> {
+  const redis = getClient();
+  await redis.del(AWAITING_CHECKIN_KEY(chatId));
+}

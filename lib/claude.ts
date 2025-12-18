@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import type { Intent, Task, BrainDump } from "./types.js";
+import type { Intent, Task, BrainDump, CheckIn } from "./types.js";
 import type { ConversationMessage } from "./redis.js";
 
 let anthropicClient: Anthropic | null = null;
@@ -25,19 +25,29 @@ Possible intents:
    - Extract the task description and delay time
    - If they mention "important" or "nag me", set isImportant to true
    - Convert time expressions to minutes (e.g., "in 2 hours" = 120 minutes, "in 30 min" = 30 minutes)
-   
+
 2. "brain_dump" - User wants to quickly capture a thought/idea
    - Keywords: "dump", "note", "idea", "thought", "remember this", just random stream of consciousness
    - If the message seems like a random thought without a clear action, treat it as a brain dump
-   
+
 3. "mark_done" - User indicates they completed a task
    - Keywords: "done", "finished", "completed", "did it"
    - Include any task description they mention to help match it
-   
+
 4. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
-   
-5. "conversation" - General chat or unclear intent
+
+5. "checkin_response" - User is responding to a daily check-in prompt
+   - They provide a rating from 1-5 (how organized they felt)
+   - May include optional notes about their day
+   - Examples: "3", "4 - pretty good day", "2, felt scattered", "5! crushed it today"
+
+6. "set_checkin_time" - User wants to change their daily check-in time
+   - Keywords: "set checkin", "change checkin time", "checkin at"
+   - Extract hour (0-23) and minute (0-59)
+   - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
+
+7. "conversation" - General chat or unclear intent
    - Provide a helpful, friendly response
    - If you can't determine the intent, ask clarifying questions
 
@@ -46,19 +56,21 @@ Response formats:
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
 - list_tasks: {"type": "list_tasks"}
+- checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
+- set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
 - conversation: {"type": "conversation", "response": "your message to the user"}
 
 Be lenient and helpful. ADHD users may send fragmented or unclear messages - try to understand their intent.`;
 
 export async function parseIntent(
   userMessage: string,
-  conversationHistory: ConversationMessage[] = []
+  conversationHistory: ConversationMessage[] = [],
 ): Promise<Intent> {
   const client = getClient();
 
   // Build messages array with conversation history
   const messages: MessageParam[] = [];
-  
+
   // Add conversation history (skip the JSON responses, just include user context)
   for (const msg of conversationHistory) {
     if (msg.role === "user") {
@@ -69,7 +81,7 @@ export async function parseIntent(
       messages.push({ role: "assistant", content: "[Previous response processed]" });
     }
   }
-  
+
   // Add current message
   messages.push({ role: "user", content: userMessage });
 
@@ -89,18 +101,18 @@ export async function parseIntent(
   try {
     // Try to extract JSON from the response (Claude sometimes wraps it in markdown)
     let jsonText = textContent.text.trim();
-    
+
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
       jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
     }
-    
+
     // Try to find JSON object in the response
     const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       jsonText = jsonMatch[0];
     }
-    
+
     const intent = JSON.parse(jsonText) as Intent;
     return intent;
   } catch (error) {
@@ -114,10 +126,7 @@ export async function parseIntent(
   }
 }
 
-export async function generateNaggingMessage(
-  task: Task,
-  naggingLevel: number
-): Promise<string> {
+export async function generateNaggingMessage(task: Task, naggingLevel: number): Promise<string> {
   const client = getClient();
 
   const urgencyPrompts: Record<number, string> = {
@@ -152,14 +161,12 @@ export async function generateNaggingMessage(
 
 export async function generateDailySummary(
   dumps: BrainDump[],
-  pendingTasks: Task[]
+  pendingTasks: Task[],
 ): Promise<string> {
   const client = getClient();
 
   const dumpsText =
-    dumps.length > 0
-      ? dumps.map((d) => `- ${d.content}`).join("\n")
-      : "No brain dumps today.";
+    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps today.";
 
   const tasksText =
     pendingTasks.length > 0
@@ -194,10 +201,7 @@ Please summarize this in a helpful, encouraging way.`,
   return `📋 Daily Summary\n\n${textContent.text}`;
 }
 
-export function calculateNextNagDelay(
-  naggingLevel: number,
-  isImportant: boolean
-): number {
+export function calculateNextNagDelay(naggingLevel: number, isImportant: boolean): number {
   // Base delays in minutes, escalating
   const baseDelays = [60, 120, 240, 360, 480]; // 1hr, 2hr, 4hr, 6hr, 8hr
 
@@ -208,3 +212,82 @@ export function calculateNextNagDelay(
   return Math.round(delay * multiplier);
 }
 
+export async function generateCheckinPrompt(): Promise<string> {
+  const client = getClient();
+
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 150,
+    system: `You are an ADHD support assistant. Generate a friendly, brief daily check-in question asking the user to rate how organized they felt today on a scale of 1-5. Encourage them to add notes if they want. Keep it warm and casual, under 2 sentences. Vary your wording to keep it fresh.`,
+    messages: [
+      {
+        role: "user",
+        content: "Generate a daily check-in prompt.",
+      },
+    ],
+  });
+
+  const textContent = message.content.find((block) => block.type === "text");
+  if (!textContent || textContent.type !== "text") {
+    return "Hey! Quick check-in: On a scale of 1-5, how organized did you feel today? Feel free to add any notes!";
+  }
+
+  return textContent.text;
+}
+
+export async function generateWeeklyInsights(
+  checkIns: CheckIn[],
+  dumps: BrainDump[],
+  completedTaskCount: number,
+): Promise<string> {
+  const client = getClient();
+
+  const checkInsText =
+    checkIns.length > 0
+      ? checkIns
+          .map((c) => {
+            const dayName = new Date(c.date).toLocaleDateString("en-US", { weekday: "long" });
+            const notesStr = c.notes ? ` - "${c.notes}"` : "";
+            return `- ${dayName}: ${c.rating}/5${notesStr}`;
+          })
+          .join("\n")
+      : "No check-ins this week.";
+
+  const avgRating =
+    checkIns.length > 0
+      ? (checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length).toFixed(1)
+      : "N/A";
+
+  const dumpsText =
+    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps this week.";
+
+  const message = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 600,
+    system: `You are an ADHD support assistant. Create an insightful weekly summary based on the user's daily check-ins. Look for patterns (e.g., which days were better/worse, any themes in their notes). Offer one or two gentle, actionable suggestions. Be encouraging and supportive. Keep it concise but meaningful.`,
+    messages: [
+      {
+        role: "user",
+        content: `Here's my week:
+
+Daily check-ins (1-5 organization rating):
+${checkInsText}
+
+Average rating: ${avgRating}
+Tasks completed: ${completedTaskCount}
+Brain dumps captured: ${dumps.length}
+
+${dumps.length > 0 ? `Brain dump topics:\n${dumpsText}` : ""}
+
+Please provide insights and patterns you notice.`,
+      },
+    ],
+  });
+
+  const textContent = message.content.find((block) => block.type === "text");
+  if (!textContent || textContent.type !== "text") {
+    return `📊 Weekly Summary\n\nCheck-ins: ${checkIns.length}/7 days\nAverage rating: ${avgRating}\nTasks completed: ${completedTaskCount}`;
+  }
+
+  return `📊 Weekly Summary\n\n${textContent.text}`;
+}
