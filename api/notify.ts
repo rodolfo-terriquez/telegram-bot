@@ -9,7 +9,7 @@ import {
   calculateNextNagDelay,
   generateCheckinPrompt,
   generateWeeklyInsights,
-} from "../lib/claude.js";
+} from "../lib/llm.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   // Only accept POST requests

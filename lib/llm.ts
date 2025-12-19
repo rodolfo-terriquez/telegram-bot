@@ -1,33 +1,96 @@
-import Anthropic from "@anthropic-ai/sdk";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
+import OpenAI from "openai";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { Intent, Task, BrainDump, CheckIn } from "./types.js";
 import type { ConversationMessage } from "./redis.js";
 
-let anthropicClient: Anthropic | null = null;
+let openrouterClient: OpenAI | null = null;
 
-function getClient(): Anthropic {
-  if (!anthropicClient) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error("ANTHROPIC_API_KEY is not set");
-    }
-    anthropicClient = new Anthropic({ apiKey });
-  }
-  return anthropicClient;
+// Model to use - configurable via environment variable
+function getModel(): string {
+  return process.env.OPENROUTER_MODEL || "x-ai/grok-3-fast";
 }
 
-const SYSTEM_PROMPT = `You are an ADHD support assistant integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
+function getClient(): OpenAI {
+  if (!openrouterClient) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new Error("OPENROUTER_API_KEY is not set");
+    }
+    openrouterClient = new OpenAI({
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey,
+      defaultHeaders: {
+        "HTTP-Referer": process.env.BASE_URL || "https://telegram-bot.vercel.app",
+        "X-Title": "ADHD Support Bot",
+      },
+    });
+  }
+  return openrouterClient;
+}
+
+// Get user's timezone from env (defaults to America/Los_Angeles)
+function getUserTimezone(): string {
+  return process.env.USER_TIMEZONE || "America/Los_Angeles";
+}
+
+// Helper to format timestamp for display
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  return date.toLocaleString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: getUserTimezone(),
+  });
+}
+
+// Helper to get current time context for system prompt
+function getCurrentTimeContext(): string {
+  const now = new Date();
+  const timezone = getUserTimezone();
+  const formatted = now.toLocaleString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone: timezone,
+    timeZoneName: "short",
+  });
+  return `CURRENT TIME: ${formatted} (User timezone: ${timezone})\n\n`;
+}
+
+// Base system prompt - timestamp will be prepended dynamically
+const BASE_SYSTEM_PROMPT = `You are an ADHD support assistant integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
 
 CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no emojis, just the raw JSON object.
 - Do NOT mimic the format of previous responses shown in conversation history
 - Previous assistant responses shown as "[I responded to the user with: ...]" are for CONTEXT ONLY
 - Your output must ALWAYS be a JSON object like {"type": "...", ...}
 
+TIME HANDLING:
+- The current date and time will be provided at the start of each request
+- For relative times ("in 2 hours", "in 30 min"), convert directly to delayMinutes
+- For absolute times ("at 3pm", "at 15:00"), calculate the difference from the current time to get delayMinutes
+- For times tomorrow or later, calculate total minutes until that time
+- If the specified time has already passed today, assume they mean tomorrow
+- Examples (if current time is 2:30 PM):
+  - "at 3pm" → delayMinutes: 30
+  - "at 2pm" → delayMinutes: 1410 (tomorrow at 2pm, ~23.5 hours)
+  - "tomorrow at 9am" → calculate minutes until tomorrow 9am
+
 Possible intents:
 1. "reminder" - User wants to be reminded about a SINGLE thing
    - Extract the task description and delay time
    - If they mention "important" or "nag me", set isImportant to true
    - Convert time expressions to minutes (e.g., "in 2 hours" = 120 minutes, "in 30 min" = 30 minutes)
+   - Handle absolute times by calculating delayMinutes from the current time
    - Use this when the user mentions only ONE task
 
 2. "multiple_reminders" - User wants to set MULTIPLE reminders at once
@@ -93,49 +156,53 @@ export async function parseIntent(
 ): Promise<Intent> {
   const client = getClient();
 
-  // Build messages array with conversation history
-  const messages: MessageParam[] = [];
+  // Build system prompt with current timestamp
+  const systemPrompt = getCurrentTimeContext() + BASE_SYSTEM_PROMPT;
 
-  // Add conversation history with context markers
-  // We need to distinguish between user-facing responses (for context) and the JSON format Claude should output
+  // Build messages array with conversation history
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+  ];
+
+  // Add conversation history with context markers and timestamps
   for (const msg of conversationHistory) {
+    const timeStr = formatTimestamp(msg.timestamp);
     if (msg.role === "user") {
-      messages.push({ role: "user", content: msg.content });
+      messages.push({ role: "user", content: `[${timeStr}] ${msg.content}` });
     } else {
       // Wrap assistant messages to indicate they were user-facing responses
-      // This prevents Claude from mimicking the response format instead of outputting JSON
       messages.push({
         role: "assistant",
-        content: `[I responded to the user with: "${msg.content}"]`,
+        content: `[${timeStr}] [I responded to the user with: "${msg.content}"]`,
       });
     }
   }
 
-  // Build the current message with context
-  let contextualMessage = userMessage;
+  // Build the current message with context and timestamp
+  const currentTime = formatTimestamp(Date.now());
+  let contextualMessage = `[${currentTime}] ${userMessage}`;
   if (isAwaitingCheckin) {
-    contextualMessage = `[CONTEXT: The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.]\n\nUser message: ${userMessage}`;
+    contextualMessage = `[CONTEXT: The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.]\n\n[${currentTime}] ${userMessage}`;
   }
 
   // Add current message
   messages.push({ role: "user", content: contextualMessage });
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const response = await client.chat.completions.create({
+    model: getModel(),
     max_tokens: 500,
-    system: SYSTEM_PROMPT,
     messages,
   });
 
   // Extract text from the response
-  const textContent = message.content.find((block) => block.type === "text");
-  if (!textContent || textContent.type !== "text") {
-    throw new Error("No text response from Claude");
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    throw new Error("No response from LLM");
   }
 
   try {
-    // Try to extract JSON from the response (Claude sometimes wraps it in markdown)
-    let jsonText = textContent.text.trim();
+    // Try to extract JSON from the response (LLM sometimes wraps it in markdown)
+    let jsonText = content.trim();
 
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
@@ -153,7 +220,7 @@ export async function parseIntent(
     const intent = JSON.parse(jsonText) as Intent;
     return intent;
   } catch (error) {
-    console.error("Failed to parse intent:", textContent.text, error);
+    console.error("Failed to parse intent:", content, error);
     // If parsing fails, return a conversation intent with error handling
     return {
       type: "conversation",
@@ -180,11 +247,14 @@ export async function generateNaggingMessage(
   const urgency =
     urgencyPrompts[Math.min(naggingLevel, 4)] || urgencyPrompts[4];
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const response = await client.chat.completions.create({
+    model: getModel(),
     max_tokens: 150,
-    system: `You are an ADHD support assistant. Generate a short, motivating reminder message for a task. ${urgency} Keep it under 2 sentences. Be supportive, not annoying. Don't use emojis excessively.`,
     messages: [
+      {
+        role: "system",
+        content: `You are an ADHD support assistant. Generate a short, motivating reminder message for a task. ${urgency} Keep it under 2 sentences. Be supportive, not annoying. Don't use emojis excessively.`,
+      },
       {
         role: "user",
         content: `Remind me about: ${task.content}`,
@@ -192,12 +262,12 @@ export async function generateNaggingMessage(
     ],
   });
 
-  const textContent = message.content.find((block) => block.type === "text");
-  if (!textContent || textContent.type !== "text") {
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
     return `Reminder: ${task.content}`;
   }
 
-  return textContent.text;
+  return content;
 }
 
 export async function generateDailySummary(
@@ -216,11 +286,14 @@ export async function generateDailySummary(
       ? pendingTasks.map((t) => `- ${t.content}`).join("\n")
       : "No pending tasks.";
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const response = await client.chat.completions.create({
+    model: getModel(),
     max_tokens: 500,
-    system: `You are an ADHD support assistant. Create a friendly, organized daily summary. Be encouraging and help the user see patterns or connections in their thoughts. Keep it concise but insightful.`,
     messages: [
+      {
+        role: "system",
+        content: `You are an ADHD support assistant. Create a friendly, organized daily summary. Be encouraging and help the user see patterns or connections in their thoughts. Keep it concise but insightful.`,
+      },
       {
         role: "user",
         content: `Here's my daily summary:
@@ -236,12 +309,12 @@ Please summarize this in a helpful, encouraging way.`,
     ],
   });
 
-  const textContent = message.content.find((block) => block.type === "text");
-  if (!textContent || textContent.type !== "text") {
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
     return `📋 Daily Summary\n\nBrain dumps: ${dumps.length}\nPending tasks: ${pendingTasks.length}`;
   }
 
-  return `📋 Daily Summary\n\n${textContent.text}`;
+  return `📋 Daily Summary\n\n${content}`;
 }
 
 export function calculateNextNagDelay(
@@ -261,11 +334,14 @@ export function calculateNextNagDelay(
 export async function generateCheckinPrompt(): Promise<string> {
   const client = getClient();
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const response = await client.chat.completions.create({
+    model: getModel(),
     max_tokens: 150,
-    system: `You are an ADHD support assistant. Generate a friendly, brief daily check-in question asking the user to rate how organized they felt today on a scale of 1-5. Encourage them to add notes if they want. Keep it warm and casual, under 2 sentences. Vary your wording to keep it fresh.`,
     messages: [
+      {
+        role: "system",
+        content: `You are an ADHD support assistant. Generate a friendly, brief daily check-in question asking the user to rate how organized they felt today on a scale of 1-5. Encourage them to add notes if they want. Keep it warm and casual, under 2 sentences. Vary your wording to keep it fresh.`,
+      },
       {
         role: "user",
         content: "Generate a daily check-in prompt.",
@@ -273,12 +349,12 @@ export async function generateCheckinPrompt(): Promise<string> {
     ],
   });
 
-  const textContent = message.content.find((block) => block.type === "text");
-  if (!textContent || textContent.type !== "text") {
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
     return "Hey! Quick check-in: On a scale of 1-5, how organized did you feel today? Feel free to add any notes!";
   }
 
-  return textContent.text;
+  return content;
 }
 
 export async function generateWeeklyInsights(
@@ -313,11 +389,14 @@ export async function generateWeeklyInsights(
       ? dumps.map((d) => `- ${d.content}`).join("\n")
       : "No brain dumps this week.";
 
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
+  const response = await client.chat.completions.create({
+    model: getModel(),
     max_tokens: 600,
-    system: `You are an ADHD support assistant. Create an insightful weekly summary based on the user's daily check-ins. Look for patterns (e.g., which days were better/worse, any themes in their notes). Offer one or two gentle, actionable suggestions. Be encouraging and supportive. Keep it concise but meaningful.`,
     messages: [
+      {
+        role: "system",
+        content: `You are an ADHD support assistant. Create an insightful weekly summary based on the user's daily check-ins. Look for patterns (e.g., which days were better/worse, any themes in their notes). Offer one or two gentle, actionable suggestions. Be encouraging and supportive. Keep it concise but meaningful.`,
+      },
       {
         role: "user",
         content: `Here's my week:
@@ -336,10 +415,11 @@ Please provide insights and patterns you notice.`,
     ],
   });
 
-  const textContent = message.content.find((block) => block.type === "text");
-  if (!textContent || textContent.type !== "text") {
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
     return `📊 Weekly Summary\n\nCheck-ins: ${checkIns.length}/7 days\nAverage rating: ${avgRating}\nTasks completed: ${completedTaskCount}`;
   }
 
-  return `📊 Weekly Summary\n\n${textContent.text}`;
+  return `📊 Weekly Summary\n\n${content}`;
 }
+

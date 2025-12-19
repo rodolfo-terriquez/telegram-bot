@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { TelegramUpdate, Intent, ReminderItem } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
-import { parseIntent } from "../lib/claude.js";
+import { parseIntent } from "../lib/llm.js";
 import * as redis from "../lib/redis.js";
 import {
   scheduleReminder,

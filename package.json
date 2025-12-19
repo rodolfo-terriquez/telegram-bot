@@ -10,7 +10,6 @@
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.0",
     "@upstash/qstash": "^2.7.0",
     "@upstash/redis": "^1.34.0",
     "openai": "^4.73.0"
