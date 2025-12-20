@@ -14,15 +14,12 @@ function getClient(): Redis {
 const TASK_KEY = (chatId: number, taskId: string) => `task:${chatId}:${taskId}`;
 const TASKS_SET_KEY = (chatId: number) => `tasks:${chatId}`;
 const DUMP_KEY = (chatId: number, dumpId: string) => `dump:${chatId}:${dumpId}`;
-const DUMPS_SET_KEY = (chatId: number, date: string) =>
-  `dumps:${chatId}:${date}`;
-const CHECKIN_KEY = (chatId: number, date: string) =>
-  `checkin:${chatId}:${date}`;
+const DUMPS_SET_KEY = (chatId: number, date: string) => `dumps:${chatId}:${date}`;
+const CHECKIN_KEY = (chatId: number, date: string) => `checkin:${chatId}:${date}`;
 const CHECKINS_SET_KEY = (chatId: number) => `checkins:${chatId}`;
 const USER_PREFS_KEY = (chatId: number) => `user_prefs:${chatId}`;
 const AWAITING_CHECKIN_KEY = (chatId: number) => `awaiting_checkin:${chatId}`;
-const COMPLETED_TASKS_KEY = (chatId: number, date: string) =>
-  `completed:${chatId}:${date}`;
+const COMPLETED_TASKS_KEY = (chatId: number, date: string) => `completed:${chatId}:${date}`;
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -60,10 +57,7 @@ export async function createTask(
   return task;
 }
 
-export async function getTask(
-  chatId: number,
-  taskId: string,
-): Promise<Task | null> {
+export async function getTask(chatId: number, taskId: string): Promise<Task | null> {
   const redis = getClient();
   const data = await redis.get<string>(TASK_KEY(chatId, taskId));
   if (!data) return null;
@@ -75,10 +69,7 @@ export async function updateTask(task: Task): Promise<void> {
   await redis.set(TASK_KEY(task.chatId, task.id), JSON.stringify(task));
 }
 
-export async function completeTask(
-  chatId: number,
-  taskId: string,
-): Promise<Task | null> {
+export async function completeTask(chatId: number, taskId: string): Promise<Task | null> {
   const redis = getClient();
   const task = await getTask(chatId, taskId);
   if (!task) return null;
@@ -97,10 +88,7 @@ export async function completeTask(
   return task;
 }
 
-export async function deleteTask(
-  chatId: number,
-  taskId: string,
-): Promise<Task | null> {
+export async function deleteTask(chatId: number, taskId: string): Promise<Task | null> {
   const redis = getClient();
   const task = await getTask(chatId, taskId);
   if (!task) return null;
@@ -182,10 +170,7 @@ export async function findTasksByDescriptions(
 }
 
 // Brain dump operations
-export async function createBrainDump(
-  chatId: number,
-  content: string,
-): Promise<BrainDump> {
+export async function createBrainDump(chatId: number, content: string): Promise<BrainDump> {
   const redis = getClient();
   const id = generateId();
   const now = Date.now();
@@ -212,14 +197,9 @@ export async function getTodaysDumps(chatId: number): Promise<BrainDump[]> {
   return getDumpsByDate(chatId, getTodayKey());
 }
 
-export async function getDumpsByDate(
-  chatId: number,
-  dateKey: string,
-): Promise<BrainDump[]> {
+export async function getDumpsByDate(chatId: number, dateKey: string): Promise<BrainDump[]> {
   const redis = getClient();
-  const dumpIds = await redis.smembers<string[]>(
-    DUMPS_SET_KEY(chatId, dateKey),
-  );
+  const dumpIds = await redis.smembers<string[]>(DUMPS_SET_KEY(chatId, dateKey));
 
   if (!dumpIds || dumpIds.length === 0) return [];
 
@@ -250,9 +230,7 @@ export async function getWeeklyDumps(chatId: number): Promise<BrainDump[]> {
   return dumps.sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export async function getWeeklyCompletedTaskCount(
-  chatId: number,
-): Promise<number> {
+export async function getWeeklyCompletedTaskCount(chatId: number): Promise<number> {
   const redis = getClient();
   const today = new Date();
   let total = 0;
@@ -263,8 +241,7 @@ export async function getWeeklyCompletedTaskCount(
     const dateKey = date.toISOString().split("T")[0];
     const count = await redis.get<number>(COMPLETED_TASKS_KEY(chatId, dateKey));
     if (count) {
-      total +=
-        typeof count === "number" ? count : parseInt(count as string, 10) || 0;
+      total += typeof count === "number" ? count : parseInt(count as string, 10) || 0;
     }
   }
 
@@ -289,7 +266,8 @@ export async function getActiveChats(): Promise<number[]> {
 
 // Conversation memory
 const CONVERSATION_KEY = (chatId: number) => `conversation:${chatId}`;
-const MAX_CONVERSATION_LENGTH = 10; // Keep last 10 message pairs
+const MAX_CONVERSATION_PAIRS = 20; // Trigger summarization at 20 pairs
+const RECENT_PAIRS_TO_KEEP = 5; // Keep 5 most recent pairs verbatim after summarization
 const CONVERSATION_TTL = 24 * 60 * 60; // 24 hours
 
 export interface ConversationMessage {
@@ -298,20 +276,50 @@ export interface ConversationMessage {
   timestamp: number;
 }
 
-export async function getConversationHistory(
-  chatId: number,
-): Promise<ConversationMessage[]> {
+export interface ConversationData {
+  messages: ConversationMessage[];
+  summary?: string; // Rolling summary of older context
+  summaryUpdatedAt?: number; // When the summary was last updated
+}
+
+export async function getConversationData(chatId: number): Promise<ConversationData> {
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
   const data = await redis.get<string>(key);
 
-  if (!data) return [];
+  if (!data) return { messages: [] };
 
   try {
-    return typeof data === "string" ? JSON.parse(data) : data;
+    const parsed = typeof data === "string" ? JSON.parse(data) : data;
+    // Handle legacy format (just an array of messages)
+    if (Array.isArray(parsed)) {
+      return { messages: parsed };
+    }
+    return parsed as ConversationData;
   } catch {
-    return [];
+    return { messages: [] };
   }
+}
+
+export async function getConversationHistory(chatId: number): Promise<ConversationMessage[]> {
+  const data = await getConversationData(chatId);
+  return data.messages;
+}
+
+export async function getConversationSummary(chatId: number): Promise<string | undefined> {
+  const data = await getConversationData(chatId);
+  return data.summary;
+}
+
+// Callback for triggering summarization (set by the caller to avoid circular imports)
+let summarizationCallback:
+  | ((messages: ConversationMessage[], existingSummary?: string) => Promise<string>)
+  | null = null;
+
+export function setSummarizationCallback(
+  callback: (messages: ConversationMessage[], existingSummary?: string) => Promise<string>,
+): void {
+  summarizationCallback = callback;
 }
 
 export async function addToConversation(
@@ -322,21 +330,63 @@ export async function addToConversation(
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
 
-  // Get existing conversation
-  const history = await getConversationHistory(chatId);
+  // Get existing conversation data
+  const conversationData = await getConversationData(chatId);
+  const { messages, summary } = conversationData;
 
   // Add new messages
   const now = Date.now();
-  history.push(
+  messages.push(
     { role: "user", content: userMessage, timestamp: now },
     { role: "assistant", content: assistantResponse, timestamp: now },
   );
 
-  // Keep only the last N message pairs (N*2 messages)
-  const trimmed = history.slice(-(MAX_CONVERSATION_LENGTH * 2));
+  // Check if we need to summarize (at 20 message pairs = 40 messages)
+  const messagePairs = messages.length / 2;
 
-  // Save with TTL
-  await redis.set(key, JSON.stringify(trimmed), { ex: CONVERSATION_TTL });
+  if (messagePairs >= MAX_CONVERSATION_PAIRS && summarizationCallback) {
+    // Get the oldest 15 pairs (30 messages) to summarize
+    const messagesToSummarize = messages.slice(
+      0,
+      (MAX_CONVERSATION_PAIRS - RECENT_PAIRS_TO_KEEP) * 2,
+    );
+    // Keep the newest 5 pairs (10 messages) verbatim
+    const recentMessages = messages.slice(-(RECENT_PAIRS_TO_KEEP * 2));
+
+    // Generate new summary (in background, don't block the response)
+    summarizationCallback(messagesToSummarize, summary)
+      .then(async (newSummary) => {
+        // Save the updated conversation with new summary and trimmed messages
+        const updatedData: ConversationData = {
+          messages: recentMessages,
+          summary: newSummary,
+          summaryUpdatedAt: Date.now(),
+        };
+        await redis.set(key, JSON.stringify(updatedData), {
+          ex: CONVERSATION_TTL,
+        });
+      })
+      .catch((err) => {
+        console.error("Failed to generate conversation summary:", err);
+      });
+
+    // For now, save without waiting for summarization
+    // (the next request will have the updated summary)
+    const tempData: ConversationData = {
+      messages,
+      summary,
+      summaryUpdatedAt: conversationData.summaryUpdatedAt,
+    };
+    await redis.set(key, JSON.stringify(tempData), { ex: CONVERSATION_TTL });
+  } else {
+    // Normal save - just update messages
+    const updatedData: ConversationData = {
+      messages,
+      summary,
+      summaryUpdatedAt: conversationData.summaryUpdatedAt,
+    };
+    await redis.set(key, JSON.stringify(updatedData), { ex: CONVERSATION_TTL });
+  }
 }
 
 export async function clearConversation(chatId: number): Promise<void> {
@@ -374,10 +424,7 @@ export async function saveCheckIn(
   return checkIn;
 }
 
-export async function getCheckIn(
-  chatId: number,
-  date: string,
-): Promise<CheckIn | null> {
+export async function getCheckIn(chatId: number, date: string): Promise<CheckIn | null> {
   const redis = getClient();
   const data = await redis.get<string>(CHECKIN_KEY(chatId, date));
   if (!data) return null;
@@ -402,18 +449,14 @@ export async function getWeeklyCheckIns(chatId: number): Promise<CheckIn[]> {
 }
 
 // User preferences operations
-export async function getUserPreferences(
-  chatId: number,
-): Promise<UserPreferences | null> {
+export async function getUserPreferences(chatId: number): Promise<UserPreferences | null> {
   const redis = getClient();
   const data = await redis.get<string>(USER_PREFS_KEY(chatId));
   if (!data) return null;
   return typeof data === "string" ? JSON.parse(data) : data;
 }
 
-export async function saveUserPreferences(
-  prefs: UserPreferences,
-): Promise<void> {
+export async function saveUserPreferences(prefs: UserPreferences): Promise<void> {
   const redis = getClient();
   await redis.set(USER_PREFS_KEY(prefs.chatId), JSON.stringify(prefs));
 }

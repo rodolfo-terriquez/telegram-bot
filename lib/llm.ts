@@ -181,14 +181,33 @@ export async function parseIntent(
   userMessage: string,
   conversationHistory: ConversationMessage[] = [],
   isAwaitingCheckin: boolean = false,
+  conversationSummary?: string,
 ): Promise<Intent> {
   const client = getClient();
 
-  // Build system prompt with current timestamp
-  const systemPrompt = getCurrentTimeContext() + BASE_SYSTEM_PROMPT;
+  // Build system prompt with current timestamp and optional conversation summary
+  let systemPrompt = getCurrentTimeContext() + BASE_SYSTEM_PROMPT;
+
+  // Add conversation summary if available
+  if (conversationSummary) {
+    systemPrompt += `\n\n---BEGIN CONTEXT SUMMARY---
+The following is a summary of earlier parts of this conversation. This is NOT part of the current conversation - it's background context to help you understand what was discussed before. The actual recent messages will follow separately.
+
+${conversationSummary}
+---END CONTEXT SUMMARY---`;
+  }
 
   // Build messages array with conversation history
   const messages: ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
+
+  // Add a marker if we have both a summary and recent messages
+  if (conversationSummary && conversationHistory.length > 0) {
+    messages.push({
+      role: "user",
+      content:
+        "[SYSTEM NOTE: The following are the most recent messages from this conversation - these are verbatim, not summarized.]",
+    });
+  }
 
   // Add conversation history with context markers and timestamps
   for (const msg of conversationHistory) {
@@ -443,4 +462,61 @@ Please share any patterns you notice, gently.`,
   }
 
   return `Weekly Summary\n\n${content}`;
+}
+
+export async function generateConversationSummary(
+  messages: { role: "user" | "assistant"; content: string; timestamp: number }[],
+  existingSummary?: string,
+): Promise<string> {
+  const client = getClient();
+
+  // Format messages for the summary prompt
+  const formattedMessages = messages
+    .map((m) => {
+      const time = new Date(m.timestamp).toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      return `[${time}] ${m.role === "user" ? "User" : "Tama"}: ${m.content}`;
+    })
+    .join("\n");
+
+  const summaryContext = existingSummary
+    ? `EXISTING CONTEXT SUMMARY (from earlier conversation):\n${existingSummary}\n\n---\n\nNEWER MESSAGES TO INCORPORATE (weight these more heavily as they are more recent):\n${formattedMessages}`
+    : `MESSAGES TO SUMMARIZE:\n${formattedMessages}`;
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 500,
+    messages: [
+      {
+        role: "system",
+        content: `You are summarizing a conversation between a user with ADHD and their support companion Tama. Create a concise summary that captures:
+
+1. Key topics discussed
+2. Any tasks, reminders, or commitments mentioned
+3. Emotional context or state the user expressed
+4. Any preferences or patterns noticed
+
+Keep the summary factual and concise (2-4 sentences). This summary will be used as context for future conversations, so focus on information that would be helpful to remember.
+
+${existingSummary ? "IMPORTANT: An existing summary from earlier in the conversation is provided. Incorporate that context but weight the newer messages more heavily since they contain more recent information. Create a unified summary that blends both." : ""}`,
+      },
+      {
+        role: "user",
+        content: summaryContext,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    // Fallback to a basic summary if LLM fails
+    return existingSummary || "Previous conversation context unavailable.";
+  }
+
+  return content;
 }

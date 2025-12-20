@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { TelegramUpdate, Intent, ReminderItem } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
-import { parseIntent } from "../lib/llm.js";
+import { parseIntent, generateConversationSummary } from "../lib/llm.js";
 import * as redis from "../lib/redis.js";
 import {
   scheduleReminder,
@@ -13,10 +13,10 @@ import {
   cancelScheduledMessage,
 } from "../lib/qstash.js";
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse,
-): Promise<void> {
+// Register the summarization callback to avoid circular imports
+redis.setSummarizationCallback(generateConversationSummary);
+
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   // Only accept POST requests
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -38,15 +38,12 @@ export default async function handler(
     // Check if user is allowed (if ALLOWED_USERS is set)
     const allowedUsers = process.env.ALLOWED_USERS;
     if (allowedUsers) {
-      const allowed = allowedUsers
-        .split(",")
-        .map((u) => u.trim().toLowerCase());
+      const allowed = allowedUsers.split(",").map((u) => u.trim().toLowerCase());
       const userId = message.from?.id?.toString();
       const username = message.from?.username?.toLowerCase();
 
       const isAllowed =
-        (userId && allowed.includes(userId)) ||
-        (username && allowed.includes(username));
+        (userId && allowed.includes(userId)) || (username && allowed.includes(username));
 
       if (!isAllowed) {
         console.log(`Unauthorized user: ${username} (${userId})`);
@@ -69,10 +66,7 @@ export default async function handler(
 
     // Handle voice messages
     if (message.voice) {
-      await telegram.sendMessage(
-        chatId,
-        "🎤 Transcribing your voice message...",
-      );
+      await telegram.sendMessage(chatId, "🎤 Transcribing your voice message...");
 
       try {
         const filePath = await telegram.getFilePath(message.voice.file_id);
@@ -98,17 +92,18 @@ export default async function handler(
       return;
     }
 
-    // Get conversation history and check-in state for context
-    const [conversationHistory, isAwaitingCheckin] = await Promise.all([
-      redis.getConversationHistory(chatId),
+    // Get conversation history, summary, and check-in state for context
+    const [conversationData, isAwaitingCheckin] = await Promise.all([
+      redis.getConversationData(chatId),
       redis.isAwaitingCheckin(chatId),
     ]);
 
-    // Parse intent using Claude (with conversation context)
+    // Parse intent using Claude (with conversation context and summary)
     const intent = await parseIntent(
       userText,
-      conversationHistory,
+      conversationData.messages,
       isAwaitingCheckin,
+      conversationData.summary,
     );
 
     // Handle the intent
@@ -126,10 +121,7 @@ export default async function handler(
   }
 }
 
-async function handleIntent(
-  chatId: number,
-  intent: Intent,
-): Promise<string | null> {
+async function handleIntent(chatId: number, intent: Intent): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
       return await handleReminder(chatId, intent);
@@ -174,24 +166,12 @@ async function handleReminder(
   },
 ): Promise<string> {
   // Create the task in Redis
-  const task = await redis.createTask(
-    chatId,
-    intent.task,
-    intent.isImportant,
-    intent.delayMinutes,
-  );
+  const task = await redis.createTask(chatId, intent.task, intent.isImportant, intent.delayMinutes);
 
   // Schedule the reminder via QStash
   try {
-    console.log(
-      `Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`,
-    );
-    const messageId = await scheduleReminder(
-      chatId,
-      task.id,
-      intent.delayMinutes,
-      false,
-    );
+    console.log(`Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`);
+    const messageId = await scheduleReminder(chatId, task.id, intent.delayMinutes, false);
     console.log(`QStash message scheduled: ${messageId}`);
 
     // Store the QStash message ID for potential cancellation
@@ -204,9 +184,7 @@ async function handleReminder(
 
   // Format time for user
   const timeStr = formatDelay(intent.delayMinutes);
-  const importantStr = intent.isImportant
-    ? " (I'll nag you until it's done!)"
-    : "";
+  const importantStr = intent.isImportant ? " (I'll nag you until it's done!)" : "";
 
   const response = `✅ Got it! I'll remind you to *${intent.task}* in ${timeStr}${importantStr}`;
   await telegram.sendMessage(chatId, response);
@@ -230,12 +208,7 @@ async function handleMultipleReminders(
 
     // Schedule the reminder via QStash
     try {
-      const messageId = await scheduleReminder(
-        chatId,
-        task.id,
-        reminder.delayMinutes,
-        false,
-      );
+      const messageId = await scheduleReminder(chatId, task.id, reminder.delayMinutes, false);
       task.qstashMessageId = messageId;
       await redis.updateTask(task);
     } catch (error) {
@@ -268,10 +241,7 @@ async function handleMarkDone(
   intent: { type: "mark_done"; taskDescription?: string },
 ): Promise<string> {
   // Find the task
-  const task = await redis.findTaskByDescription(
-    chatId,
-    intent.taskDescription,
-  );
+  const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
 
   if (!task) {
     const response =
@@ -298,10 +268,7 @@ async function handleCancelTask(
   intent: { type: "cancel_task"; taskDescription?: string },
 ): Promise<string> {
   // Find the task
-  const task = await redis.findTaskByDescription(
-    chatId,
-    intent.taskDescription,
-  );
+  const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
 
   if (!task) {
     const response =
@@ -327,10 +294,7 @@ async function handleCancelMultipleTasks(
   chatId: number,
   intent: { type: "cancel_multiple_tasks"; taskDescriptions: string[] },
 ): Promise<string> {
-  const tasks = await redis.findTasksByDescriptions(
-    chatId,
-    intent.taskDescriptions,
-  );
+  const tasks = await redis.findTasksByDescriptions(chatId, intent.taskDescriptions);
 
   if (tasks.length === 0) {
     const response =
@@ -361,8 +325,7 @@ async function handleListTasks(chatId: number): Promise<string> {
   const tasks = await redis.getPendingTasks(chatId);
 
   if (tasks.length === 0) {
-    const response =
-      "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘";
+    const response = "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘";
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -459,22 +422,11 @@ async function handleSetCheckinTime(
 
   // Schedule new check-in, daily summary, and weekly summary
   const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
-  const dailySummaryScheduleId = await scheduleDailySummary(
-    chatId,
-    cronExpression,
-  );
-  const weeklySummaryScheduleId = await scheduleWeeklySummary(
-    chatId,
-    weeklyCron,
-  );
+  const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
+  const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
 
   // Save preferences with all schedule IDs
-  const prefs = await redis.setCheckinTime(
-    chatId,
-    hour,
-    minute,
-    checkinScheduleId,
-  );
+  const prefs = await redis.setCheckinTime(chatId, hour, minute, checkinScheduleId);
   prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
   prefs.dailySummaryScheduleId = dailySummaryScheduleId;
   await redis.saveUserPreferences(prefs);
@@ -501,26 +453,12 @@ async function setupDefaultSchedules(chatId: number): Promise<void> {
     const weeklyCron = `${defaultMinute} ${defaultHour} * * 0`; // Sundays
 
     // Schedule all recurring notifications
-    const checkinScheduleId = await scheduleDailyCheckin(
-      chatId,
-      cronExpression,
-    );
-    const dailySummaryScheduleId = await scheduleDailySummary(
-      chatId,
-      cronExpression,
-    );
-    const weeklySummaryScheduleId = await scheduleWeeklySummary(
-      chatId,
-      weeklyCron,
-    );
+    const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
+    const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
+    const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
 
     // Save preferences
-    const prefs = await redis.setCheckinTime(
-      chatId,
-      defaultHour,
-      defaultMinute,
-      checkinScheduleId,
-    );
+    const prefs = await redis.setCheckinTime(chatId, defaultHour, defaultMinute, checkinScheduleId);
     prefs.dailySummaryScheduleId = dailySummaryScheduleId;
     prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
     await redis.saveUserPreferences(prefs);
