@@ -66,8 +66,33 @@ function getCurrentTimeContext(): string {
   return `CURRENT TIME: ${formatted} (User timezone: ${timezone})\n\n`;
 }
 
+// Tama personality prompt - used across all LLM interactions
+const TAMA_PERSONALITY = `You are Tama, a cozy cat-girl companion designed to support a user with ADHD.
+
+Your role is not to manage, coach, or supervise. You are a calm, non-judgmental companion who helps by offering presence, structure, and gentle nudges.
+
+Personality:
+- Be warm, patient, and low-pressure
+- Treat forgetfulness, procrastination, and task avoidance as neutral facts
+- Never shame, scold, guilt, or pressure
+- Never imply moral value in productivity
+
+Communication style:
+- Default to 1-2 short sentences
+- Use soft, conversational language
+- Prefer "maybe," "if you want," "we could"
+- Avoid absolutes ("must," "always," "never")
+- Avoid exclamation points except for small, quiet celebrations
+- Emoji use is rare and minimal
+
+Reminders should be framed as soft nudges, never commands. Instead of "You should..." or "Don't forget...", say things like "Just a soft reminder..." or "This came up again, in case now's better."
+
+Treat missed or abandoned tasks as neutral. Always offer dropping the task as a valid option.
+
+Keep celebrations calm and proportional: "Nice. That counts." or "Good stopping point."`;
+
 // Base system prompt - timestamp will be prepended dynamically
-const BASE_SYSTEM_PROMPT = `You are an ADHD support assistant integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
+const BASE_SYSTEM_PROMPT = `You are Tama, a cozy cat-girl ADHD support companion integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
 
 CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no emojis, just the raw JSON object.
 - Do NOT mimic the format of previous responses shown in conversation history
@@ -88,7 +113,7 @@ TIME HANDLING:
 Possible intents:
 1. "reminder" - User wants to be reminded about a SINGLE thing
    - Extract the task description and delay time
-   - If they mention "important" or "nag me", set isImportant to true
+   - If they mention "important", "urgent", "critical", "nag me", "keep reminding", "don't let me forget", or similar phrases indicating they need persistent reminders, set isImportant to true
    - Convert time expressions to minutes (e.g., "in 2 hours" = 120 minutes, "in 30 min" = 30 minutes)
    - Handle absolute times by calculating delayMinutes from the current time
    - Use this when the user mentions only ONE task
@@ -132,8 +157,11 @@ Possible intents:
    - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
 
 10. "conversation" - General chat or unclear intent
-   - Provide a helpful, friendly response
-   - If you can't determine the intent, ask clarifying questions
+   - Provide a warm, low-pressure response in Tama's voice (cozy cat-girl companion)
+   - Keep responses to 1-2 short sentences, soft and conversational
+   - If you can't determine the intent, gently ask clarifying questions
+   - Use "maybe," "if you want," "we could" - avoid absolutes
+   - Minimal emoji use (optional: 🐾 ☕ 🌱)
 
 Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
@@ -147,7 +175,7 @@ Response formats:
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
 - conversation: {"type": "conversation", "response": "your message to the user"}
 
-Be lenient and helpful. ADHD users may send fragmented or unclear messages - try to understand their intent.`;
+Be lenient and understanding. ADHD users may send fragmented or unclear messages - try to understand their intent. Remember: you're sitting beside the user, not above them.`;
 
 export async function parseIntent(
   userMessage: string,
@@ -160,9 +188,7 @@ export async function parseIntent(
   const systemPrompt = getCurrentTimeContext() + BASE_SYSTEM_PROMPT;
 
   // Build messages array with conversation history
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-  ];
+  const messages: ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
 
   // Add conversation history with context markers and timestamps
   for (const msg of conversationHistory) {
@@ -206,9 +232,7 @@ export async function parseIntent(
 
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
-      jsonText = jsonText
-        .replace(/^```(?:json)?\n?/, "")
-        .replace(/\n?```$/, "");
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
     }
 
     // Try to find JSON object in the response
@@ -225,27 +249,24 @@ export async function parseIntent(
     return {
       type: "conversation",
       response:
-        "I had trouble understanding that. Could you rephrase? You can ask me to remind you about something, capture a quick thought, or mark tasks as done.",
+        "Hmm, I didn't quite catch that. Could you say it another way? I can help with reminders, hold onto thoughts for you, or mark things done.",
     };
   }
 }
 
-export async function generateNaggingMessage(
-  task: Task,
-  naggingLevel: number,
-): Promise<string> {
+export async function generateNaggingMessage(task: Task, naggingLevel: number): Promise<string> {
   const client = getClient();
 
-  const urgencyPrompts: Record<number, string> = {
-    0: "Be gentle and friendly. First reminder.",
-    1: "Slightly more insistent but still friendly. Second reminder.",
-    2: "More urgent tone. Third reminder - emphasize importance.",
-    3: "Quite urgent now. Fourth reminder - express concern.",
-    4: "Very urgent. Final warnings - this really needs to get done.",
+  // Tama's gentle reminder styles - never escalating to pressure or urgency
+  const reminderStyles: Record<number, string> = {
+    0: "This is the first gentle nudge. Frame it as 'just passing this along' or 'in case now's a good time.'",
+    1: "Second soft reminder. Maybe acknowledge it came up again. Offer to reschedule or drop it if needed.",
+    2: "Third reminder. Stay gentle. You could mention you're still holding onto this for them.",
+    3: "Fourth reminder. Remain calm and non-judgmental. Offer options: reschedule, break it down, or let it go.",
+    4: "Final reminder. No pressure. Let them know this is the last nudge, and it's okay either way.",
   };
 
-  const urgency =
-    urgencyPrompts[Math.min(naggingLevel, 4)] || urgencyPrompts[4];
+  const style = reminderStyles[Math.min(naggingLevel, 4)] || reminderStyles[4];
 
   const response = await client.chat.completions.create({
     model: getModel(),
@@ -253,7 +274,11 @@ export async function generateNaggingMessage(
     messages: [
       {
         role: "system",
-        content: `You are an ADHD support assistant. Generate a short, motivating reminder message for a task. ${urgency} Keep it under 2 sentences. Be supportive, not annoying. Don't use emojis excessively.`,
+        content: `${TAMA_PERSONALITY}
+
+Generate a soft reminder message for a task. ${style}
+
+Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." - instead use phrases like "Just a soft reminder..." or "This came up again, in case now's better." Never shame or pressure.`,
       },
       {
         role: "user",
@@ -264,7 +289,7 @@ export async function generateNaggingMessage(
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
-    return `Reminder: ${task.content}`;
+    return `Just a soft reminder about: ${task.content}`;
   }
 
   return content;
@@ -277,9 +302,7 @@ export async function generateDailySummary(
   const client = getClient();
 
   const dumpsText =
-    dumps.length > 0
-      ? dumps.map((d) => `- ${d.content}`).join("\n")
-      : "No brain dumps today.";
+    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps today.";
 
   const tasksText =
     pendingTasks.length > 0
@@ -292,7 +315,9 @@ export async function generateDailySummary(
     messages: [
       {
         role: "system",
-        content: `You are an ADHD support assistant. Create a friendly, organized daily summary. Be encouraging and help the user see patterns or connections in their thoughts. Keep it concise but insightful.`,
+        content: `${TAMA_PERSONALITY}
+
+Create a calm, organized daily summary. Help the user see any patterns or connections in their thoughts without being preachy. If there are pending tasks, present them neutrally - no guilt. Keep it concise and warm. No productivity judgment.`,
       },
       {
         role: "user",
@@ -304,23 +329,20 @@ ${dumpsText}
 Pending tasks/reminders:
 ${tasksText}
 
-Please summarize this in a helpful, encouraging way.`,
+Please summarize this in a gentle, supportive way.`,
       },
     ],
   });
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
-    return `📋 Daily Summary\n\nBrain dumps: ${dumps.length}\nPending tasks: ${pendingTasks.length}`;
+    return `Daily Summary\n\nBrain dumps: ${dumps.length}\nPending tasks: ${pendingTasks.length}`;
   }
 
-  return `📋 Daily Summary\n\n${content}`;
+  return `Daily Summary\n\n${content}`;
 }
 
-export function calculateNextNagDelay(
-  naggingLevel: number,
-  isImportant: boolean,
-): number {
+export function calculateNextNagDelay(naggingLevel: number, isImportant: boolean): number {
   // Base delays in minutes, escalating
   const baseDelays = [60, 120, 240, 360, 480]; // 1hr, 2hr, 4hr, 6hr, 8hr
 
@@ -340,7 +362,9 @@ export async function generateCheckinPrompt(): Promise<string> {
     messages: [
       {
         role: "system",
-        content: `You are an ADHD support assistant. Generate a friendly, brief daily check-in question asking the user to rate how organized they felt today on a scale of 1-5. Encourage them to add notes if they want. Keep it warm and casual, under 2 sentences. Vary your wording to keep it fresh.`,
+        content: `${TAMA_PERSONALITY}
+
+Generate a soft daily check-in. Ask the user to rate how their day felt on a scale of 1-5, with optional notes. Keep it to 1-2 sentences, warm and low-pressure. No exclamation points. Vary your wording to keep it fresh. Frame it as curiosity, not obligation.`,
       },
       {
         role: "user",
@@ -351,7 +375,7 @@ export async function generateCheckinPrompt(): Promise<string> {
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
-    return "Hey! Quick check-in: On a scale of 1-5, how organized did you feel today? Feel free to add any notes!";
+    return "Hey. Quick check-in if you want - on a scale of 1-5, how did today feel? Notes are optional.";
   }
 
   return content;
@@ -379,15 +403,11 @@ export async function generateWeeklyInsights(
 
   const avgRating =
     checkIns.length > 0
-      ? (
-          checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length
-        ).toFixed(1)
+      ? (checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length).toFixed(1)
       : "N/A";
 
   const dumpsText =
-    dumps.length > 0
-      ? dumps.map((d) => `- ${d.content}`).join("\n")
-      : "No brain dumps this week.";
+    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps this week.";
 
   const response = await client.chat.completions.create({
     model: getModel(),
@@ -395,13 +415,15 @@ export async function generateWeeklyInsights(
     messages: [
       {
         role: "system",
-        content: `You are an ADHD support assistant. Create an insightful weekly summary based on the user's daily check-ins. Look for patterns (e.g., which days were better/worse, any themes in their notes). Offer one or two gentle, actionable suggestions. Be encouraging and supportive. Keep it concise but meaningful.`,
+        content: `${TAMA_PERSONALITY}
+
+Create a gentle weekly reflection. Notice patterns (which days felt better/harder, any themes) without judgment. If you offer suggestions, frame them as options, not directives - "maybe," "you could try," "if it helps." Never imply the user should have done more. Treat all outcomes as neutral data. Keep it warm and concise.`,
       },
       {
         role: "user",
         content: `Here's my week:
 
-Daily check-ins (1-5 organization rating):
+Daily check-ins (1-5 rating):
 ${checkInsText}
 
 Average rating: ${avgRating}
@@ -410,16 +432,15 @@ Brain dumps captured: ${dumps.length}
 
 ${dumps.length > 0 ? `Brain dump topics:\n${dumpsText}` : ""}
 
-Please provide insights and patterns you notice.`,
+Please share any patterns you notice, gently.`,
       },
     ],
   });
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
-    return `📊 Weekly Summary\n\nCheck-ins: ${checkIns.length}/7 days\nAverage rating: ${avgRating}\nTasks completed: ${completedTaskCount}`;
+    return `Weekly Summary\n\nCheck-ins: ${checkIns.length}/7 days\nAverage rating: ${avgRating}\nTasks completed: ${completedTaskCount}`;
   }
 
-  return `📊 Weekly Summary\n\n${content}`;
+  return `Weekly Summary\n\n${content}`;
 }
-
