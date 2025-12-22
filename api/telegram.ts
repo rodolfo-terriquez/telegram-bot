@@ -2,7 +2,11 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { TelegramUpdate, Intent, ReminderItem } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
-import { parseIntent, generateConversationSummary } from "../lib/llm.js";
+import {
+  parseIntent,
+  generateConversationSummary,
+  generateActionResponse,
+} from "../lib/llm.js";
 import * as redis from "../lib/redis.js";
 import {
   scheduleReminder,
@@ -16,7 +20,10 @@ import {
 // Register the summarization callback to avoid circular imports
 redis.setSummarizationCallback(generateConversationSummary);
 
-export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse,
+): Promise<void> {
   // Only accept POST requests
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -38,12 +45,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     // Check if user is allowed (if ALLOWED_USERS is set)
     const allowedUsers = process.env.ALLOWED_USERS;
     if (allowedUsers) {
-      const allowed = allowedUsers.split(",").map((u) => u.trim().toLowerCase());
+      const allowed = allowedUsers
+        .split(",")
+        .map((u) => u.trim().toLowerCase());
       const userId = message.from?.id?.toString();
       const username = message.from?.username?.toLowerCase();
 
       const isAllowed =
-        (userId && allowed.includes(userId)) || (username && allowed.includes(username));
+        (userId && allowed.includes(userId)) ||
+        (username && allowed.includes(username));
 
       if (!isAllowed) {
         console.log(`Unauthorized user: ${username} (${userId})`);
@@ -66,7 +76,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
 
     // Handle voice messages
     if (message.voice) {
-      await telegram.sendMessage(chatId, "🎤 Transcribing your voice message...");
+      await telegram.sendMessage(
+        chatId,
+        "🎤 Transcribing your voice message...",
+      );
 
       try {
         const filePath = await telegram.getFilePath(message.voice.file_id);
@@ -121,7 +134,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 }
 
-async function handleIntent(chatId: number, intent: Intent): Promise<string | null> {
+async function handleIntent(
+  chatId: number,
+  intent: Intent,
+): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
       return await handleReminder(chatId, intent);
@@ -166,12 +182,24 @@ async function handleReminder(
   },
 ): Promise<string> {
   // Create the task in Redis
-  const task = await redis.createTask(chatId, intent.task, intent.isImportant, intent.delayMinutes);
+  const task = await redis.createTask(
+    chatId,
+    intent.task,
+    intent.isImportant,
+    intent.delayMinutes,
+  );
 
   // Schedule the reminder via QStash
   try {
-    console.log(`Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`);
-    const messageId = await scheduleReminder(chatId, task.id, intent.delayMinutes, false);
+    console.log(
+      `Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`,
+    );
+    const messageId = await scheduleReminder(
+      chatId,
+      task.id,
+      intent.delayMinutes,
+      false,
+    );
     console.log(`QStash message scheduled: ${messageId}`);
 
     // Store the QStash message ID for potential cancellation
@@ -184,9 +212,13 @@ async function handleReminder(
 
   // Format time for user
   const timeStr = formatDelay(intent.delayMinutes);
-  const importantStr = intent.isImportant ? " (I'll nag you until it's done!)" : "";
 
-  const response = `✅ Got it! I'll remind you to *${intent.task}* in ${timeStr}${importantStr}`;
+  const response = await generateActionResponse({
+    type: "reminder_created",
+    task: intent.task,
+    timeStr,
+    isImportant: intent.isImportant,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -195,7 +227,11 @@ async function handleMultipleReminders(
   chatId: number,
   intent: { type: "multiple_reminders"; reminders: ReminderItem[] },
 ): Promise<string> {
-  const createdTasks: string[] = [];
+  const createdTasks: {
+    task: string;
+    timeStr: string;
+    isImportant: boolean;
+  }[] = [];
 
   for (const reminder of intent.reminders) {
     // Create the task in Redis
@@ -208,7 +244,12 @@ async function handleMultipleReminders(
 
     // Schedule the reminder via QStash
     try {
-      const messageId = await scheduleReminder(chatId, task.id, reminder.delayMinutes, false);
+      const messageId = await scheduleReminder(
+        chatId,
+        task.id,
+        reminder.delayMinutes,
+        false,
+      );
       task.qstashMessageId = messageId;
       await redis.updateTask(task);
     } catch (error) {
@@ -216,11 +257,17 @@ async function handleMultipleReminders(
     }
 
     const timeStr = formatDelay(reminder.delayMinutes);
-    const importantStr = reminder.isImportant ? " ⚡" : "";
-    createdTasks.push(`• *${reminder.task}* in ${timeStr}${importantStr}`);
+    createdTasks.push({
+      task: reminder.task,
+      timeStr,
+      isImportant: reminder.isImportant,
+    });
   }
 
-  const response = `✅ Created ${intent.reminders.length} reminders:\n\n${createdTasks.join("\n")}`;
+  const response = await generateActionResponse({
+    type: "multiple_reminders_created",
+    reminders: createdTasks,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -231,7 +278,10 @@ async function handleBrainDump(
 ): Promise<string> {
   await redis.createBrainDump(chatId, intent.content);
 
-  const response = `💭 Captured! I've saved that thought. You'll see it in your daily summary.`;
+  const response = await generateActionResponse({
+    type: "brain_dump_saved",
+    content: intent.content,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -241,11 +291,16 @@ async function handleMarkDone(
   intent: { type: "mark_done"; taskDescription?: string },
 ): Promise<string> {
   // Find the task
-  const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
+  const task = await redis.findTaskByDescription(
+    chatId,
+    intent.taskDescription,
+  );
 
   if (!task) {
-    const response =
-      "I couldn't find a pending task to mark as done. You can say 'list tasks' to see your pending items.";
+    const response = await generateActionResponse({
+      type: "task_not_found",
+      action: "done",
+    });
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -258,7 +313,10 @@ async function handleMarkDone(
   // Complete the task
   await redis.completeTask(chatId, task.id);
 
-  const response = `🎉 Awesome! Marked *${task.content}* as done. Great job!`;
+  const response = await generateActionResponse({
+    type: "task_completed",
+    task: task.content,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -268,11 +326,16 @@ async function handleCancelTask(
   intent: { type: "cancel_task"; taskDescription?: string },
 ): Promise<string> {
   // Find the task
-  const task = await redis.findTaskByDescription(chatId, intent.taskDescription);
+  const task = await redis.findTaskByDescription(
+    chatId,
+    intent.taskDescription,
+  );
 
   if (!task) {
-    const response =
-      "I couldn't find a pending task to cancel. You can say 'list tasks' to see your pending items.";
+    const response = await generateActionResponse({
+      type: "task_not_found",
+      action: "cancel",
+    });
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -285,7 +348,10 @@ async function handleCancelTask(
   // Delete the task
   await redis.deleteTask(chatId, task.id);
 
-  const response = `✅ Cancelled *${task.content}*. No worries, priorities change!`;
+  const response = await generateActionResponse({
+    type: "task_cancelled",
+    task: task.content,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -294,11 +360,16 @@ async function handleCancelMultipleTasks(
   chatId: number,
   intent: { type: "cancel_multiple_tasks"; taskDescriptions: string[] },
 ): Promise<string> {
-  const tasks = await redis.findTasksByDescriptions(chatId, intent.taskDescriptions);
+  const tasks = await redis.findTasksByDescriptions(
+    chatId,
+    intent.taskDescriptions,
+  );
 
   if (tasks.length === 0) {
-    const response =
-      "I couldn't find any matching tasks to cancel. You can say 'list tasks' to see your pending items.";
+    const response = await generateActionResponse({
+      type: "task_not_found",
+      action: "cancel",
+    });
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -313,10 +384,13 @@ async function handleCancelMultipleTasks(
 
     // Delete the task
     await redis.deleteTask(chatId, task.id);
-    cancelledTasks.push(`• *${task.content}*`);
+    cancelledTasks.push(task.content);
   }
 
-  const response = `✅ Cancelled ${tasks.length} task${tasks.length > 1 ? "s" : ""}:\n\n${cancelledTasks.join("\n")}\n\nNo worries, priorities change!`;
+  const response = await generateActionResponse({
+    type: "multiple_tasks_cancelled",
+    tasks: cancelledTasks,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -325,20 +399,21 @@ async function handleListTasks(chatId: number): Promise<string> {
   const tasks = await redis.getPendingTasks(chatId);
 
   if (tasks.length === 0) {
-    const response = "You have no pending tasks or reminders. Enjoy the mental clarity! 🧘";
+    const response = await generateActionResponse({ type: "no_tasks" });
     await telegram.sendMessage(chatId, response);
     return response;
   }
 
-  const taskList = tasks
-    .map((t, i) => {
-      const timeStr = formatFutureTime(t.nextReminder);
-      const important = t.isImportant ? " ⚡" : "";
-      return `${i + 1}. ${t.content}${important}\n   ⏰ ${timeStr}`;
-    })
-    .join("\n\n");
+  const taskList = tasks.map((t) => ({
+    content: t.content,
+    timeStr: formatFutureTime(t.nextReminder),
+    isImportant: t.isImportant,
+  }));
 
-  const response = `📋 *Your pending tasks:*\n\n${taskList}\n\nReply "done" when you complete something!`;
+  const response = await generateActionResponse({
+    type: "task_list",
+    tasks: taskList,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -390,8 +465,11 @@ async function handleCheckinResponse(
   // Clear the awaiting state
   await redis.clearAwaitingCheckin(chatId);
 
-  const notesAck = intent.notes ? " I've noted your thoughts too." : "";
-  const response = `Got it! Logged your check-in: ${intent.rating}/5.${notesAck} Keep it up!`;
+  const response = await generateActionResponse({
+    type: "checkin_logged",
+    rating: intent.rating,
+    hasNotes: !!intent.notes,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -422,11 +500,22 @@ async function handleSetCheckinTime(
 
   // Schedule new check-in, daily summary, and weekly summary
   const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
-  const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
-  const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
+  const dailySummaryScheduleId = await scheduleDailySummary(
+    chatId,
+    cronExpression,
+  );
+  const weeklySummaryScheduleId = await scheduleWeeklySummary(
+    chatId,
+    weeklyCron,
+  );
 
   // Save preferences with all schedule IDs
-  const prefs = await redis.setCheckinTime(chatId, hour, minute, checkinScheduleId);
+  const prefs = await redis.setCheckinTime(
+    chatId,
+    hour,
+    minute,
+    checkinScheduleId,
+  );
   prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
   prefs.dailySummaryScheduleId = dailySummaryScheduleId;
   await redis.saveUserPreferences(prefs);
@@ -437,7 +526,10 @@ async function handleSetCheckinTime(
   const displayMinute = minute.toString().padStart(2, "0");
   const timeStr = `${displayHour}:${displayMinute} ${period}`;
 
-  const response = `Done! I'll check in with you daily at ${timeStr}. You'll also get a daily summary and a weekly summary on Sundays at the same time.`;
+  const response = await generateActionResponse({
+    type: "checkin_time_set",
+    timeStr,
+  });
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -453,12 +545,26 @@ async function setupDefaultSchedules(chatId: number): Promise<void> {
     const weeklyCron = `${defaultMinute} ${defaultHour} * * 0`; // Sundays
 
     // Schedule all recurring notifications
-    const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
-    const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
-    const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
+    const checkinScheduleId = await scheduleDailyCheckin(
+      chatId,
+      cronExpression,
+    );
+    const dailySummaryScheduleId = await scheduleDailySummary(
+      chatId,
+      cronExpression,
+    );
+    const weeklySummaryScheduleId = await scheduleWeeklySummary(
+      chatId,
+      weeklyCron,
+    );
 
     // Save preferences
-    const prefs = await redis.setCheckinTime(chatId, defaultHour, defaultMinute, checkinScheduleId);
+    const prefs = await redis.setCheckinTime(
+      chatId,
+      defaultHour,
+      defaultMinute,
+      checkinScheduleId,
+    );
     prefs.dailySummaryScheduleId = dailySummaryScheduleId;
     prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
     await redis.saveUserPreferences(prefs);

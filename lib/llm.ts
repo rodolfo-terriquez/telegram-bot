@@ -20,7 +20,8 @@ function getClient(): OpenAI {
       baseURL: "https://openrouter.ai/api/v1",
       apiKey,
       defaultHeaders: {
-        "HTTP-Referer": process.env.BASE_URL || "https://telegram-bot.vercel.app",
+        "HTTP-Referer":
+          process.env.BASE_URL || "https://telegram-bot.vercel.app",
         "X-Title": "ADHD Support Bot",
       },
     });
@@ -198,7 +199,9 @@ ${conversationSummary}
   }
 
   // Build messages array with conversation history
-  const messages: ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+  ];
 
   // Add a marker if we have both a summary and recent messages
   if (conversationSummary && conversationHistory.length > 0) {
@@ -251,7 +254,9 @@ ${conversationSummary}
 
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
-      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+      jsonText = jsonText
+        .replace(/^```(?:json)?\n?/, "")
+        .replace(/\n?```$/, "");
     }
 
     // Try to find JSON object in the response
@@ -273,7 +278,10 @@ ${conversationSummary}
   }
 }
 
-export async function generateNaggingMessage(task: Task, naggingLevel: number): Promise<string> {
+export async function generateNaggingMessage(
+  task: Task,
+  naggingLevel: number,
+): Promise<string> {
   const client = getClient();
 
   // Tama's gentle reminder styles - never escalating to pressure or urgency
@@ -321,7 +329,9 @@ export async function generateDailySummary(
   const client = getClient();
 
   const dumpsText =
-    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps today.";
+    dumps.length > 0
+      ? dumps.map((d) => `- ${d.content}`).join("\n")
+      : "No brain dumps today.";
 
   const tasksText =
     pendingTasks.length > 0
@@ -361,7 +371,10 @@ Please summarize this in a gentle, supportive way.`,
   return `Daily Summary\n\n${content}`;
 }
 
-export function calculateNextNagDelay(naggingLevel: number, isImportant: boolean): number {
+export function calculateNextNagDelay(
+  naggingLevel: number,
+  isImportant: boolean,
+): number {
   // Base delays in minutes, escalating
   const baseDelays = [60, 120, 240, 360, 480]; // 1hr, 2hr, 4hr, 6hr, 8hr
 
@@ -422,11 +435,15 @@ export async function generateWeeklyInsights(
 
   const avgRating =
     checkIns.length > 0
-      ? (checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length).toFixed(1)
+      ? (
+          checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length
+        ).toFixed(1)
       : "N/A";
 
   const dumpsText =
-    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps this week.";
+    dumps.length > 0
+      ? dumps.map((d) => `- ${d.content}`).join("\n")
+      : "No brain dumps this week.";
 
   const response = await client.chat.completions.create({
     model: getModel(),
@@ -464,8 +481,144 @@ Please share any patterns you notice, gently.`,
   return `Weekly Summary\n\n${content}`;
 }
 
+// Action types for generating dynamic responses
+export type ActionContext =
+  | {
+      type: "reminder_created";
+      task: string;
+      timeStr: string;
+      isImportant: boolean;
+    }
+  | {
+      type: "multiple_reminders_created";
+      reminders: { task: string; timeStr: string; isImportant: boolean }[];
+    }
+  | { type: "brain_dump_saved"; content: string }
+  | { type: "task_completed"; task: string }
+  | { type: "task_cancelled"; task: string }
+  | { type: "multiple_tasks_cancelled"; tasks: string[] }
+  | {
+      type: "task_list";
+      tasks: { content: string; timeStr: string; isImportant: boolean }[];
+    }
+  | { type: "no_tasks" }
+  | { type: "task_not_found"; action: "done" | "cancel" }
+  | { type: "checkin_logged"; rating: number; hasNotes: boolean }
+  | { type: "checkin_time_set"; timeStr: string };
+
+export async function generateActionResponse(
+  context: ActionContext,
+): Promise<string> {
+  const client = getClient();
+
+  let prompt: string;
+
+  switch (context.type) {
+    case "reminder_created":
+      prompt = `The user just set a reminder for "${context.task}" in ${context.timeStr}.${context.isImportant ? " They marked it as important, so I'll nag them until it's done." : ""} Acknowledge this warmly and briefly.`;
+      break;
+    case "multiple_reminders_created":
+      const reminderList = context.reminders
+        .map(
+          (r) =>
+            `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`,
+        )
+        .join("\n");
+      prompt = `The user just created ${context.reminders.length} reminders:\n${reminderList}\nAcknowledge this briefly - confirm they're set.`;
+      break;
+    case "brain_dump_saved":
+      prompt = `The user just captured a thought/brain dump: "${context.content}". Acknowledge that it's been saved and they'll see it in their daily summary. Keep it very brief.`;
+      break;
+    case "task_completed":
+      prompt = `The user just marked "${context.task}" as done. Give them a calm, proportional acknowledgment. Remember: "Nice. That counts." style, not over-the-top celebration.`;
+      break;
+    case "task_cancelled":
+      prompt = `The user just cancelled the task "${context.task}". Acknowledge neutrally - it's okay to change priorities or drop things.`;
+      break;
+    case "multiple_tasks_cancelled":
+      const taskList = context.tasks.map((t) => `- "${t}"`).join("\n");
+      prompt = `The user just cancelled ${context.tasks.length} tasks:\n${taskList}\nAcknowledge neutrally - it's okay to change priorities.`;
+      break;
+    case "task_list":
+      const formattedTasks = context.tasks
+        .map(
+          (t, i) =>
+            `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
+        )
+        .join("\n");
+      prompt = `Show the user their pending tasks in a clear format. Here are the tasks:\n${formattedTasks}\n\nPresent this list clearly. You can add a brief, warm intro or outro but keep it minimal.`;
+      break;
+    case "no_tasks":
+      prompt = `The user has no pending tasks or reminders. Let them know in a warm, brief way - they have a clear plate.`;
+      break;
+    case "task_not_found":
+      prompt = `The user tried to mark a task as ${context.action === "done" ? "done" : "cancelled"}, but I couldn't find a matching pending task. Gently let them know and suggest they can say "list tasks" to see what's pending.`;
+      break;
+    case "checkin_logged":
+      prompt = `The user just completed their daily check-in with a rating of ${context.rating}/5.${context.hasNotes ? " They also included some notes." : ""} Acknowledge briefly - no big fanfare, just a warm receipt.`;
+      break;
+    case "checkin_time_set":
+      prompt = `The user just set their daily check-in time to ${context.timeStr}. They'll also get a daily summary and weekly summary on Sundays at this time. Confirm this briefly.`;
+      break;
+  }
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 200,
+    messages: [
+      {
+        role: "system",
+        content: `${TAMA_PERSONALITY}
+
+Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be warm but brief. For task lists, you may format with bullet points or numbers.`,
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    // Fallbacks for each type
+    switch (context.type) {
+      case "reminder_created":
+        return `Got it, I'll remind you about ${context.task} in ${context.timeStr}.`;
+      case "multiple_reminders_created":
+        return `Set ${context.reminders.length} reminders for you.`;
+      case "brain_dump_saved":
+        return `Captured that thought.`;
+      case "task_completed":
+        return `Marked ${context.task} as done.`;
+      case "task_cancelled":
+        return `Cancelled ${context.task}.`;
+      case "multiple_tasks_cancelled":
+        return `Cancelled ${context.tasks.length} tasks.`;
+      case "task_list":
+        return context.tasks
+          .map((t, i) => `${i + 1}. ${t.content} - ${t.timeStr}`)
+          .join("\n");
+      case "no_tasks":
+        return `You have no pending tasks.`;
+      case "task_not_found":
+        return `Couldn't find a matching task. Say "list tasks" to see what's pending.`;
+      case "checkin_logged":
+        return `Logged your check-in: ${context.rating}/5.`;
+      case "checkin_time_set":
+        return `Check-in time set to ${context.timeStr}.`;
+    }
+  }
+
+  return content;
+}
+
 export async function generateConversationSummary(
-  messages: { role: "user" | "assistant"; content: string; timestamp: number }[],
+  messages: {
+    role: "user" | "assistant";
+    content: string;
+    timestamp: number;
+  }[],
   existingSummary?: string,
 ): Promise<string> {
   const client = getClient();
