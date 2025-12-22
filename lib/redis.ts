@@ -14,12 +14,16 @@ function getClient(): Redis {
 const TASK_KEY = (chatId: number, taskId: string) => `task:${chatId}:${taskId}`;
 const TASKS_SET_KEY = (chatId: number) => `tasks:${chatId}`;
 const DUMP_KEY = (chatId: number, dumpId: string) => `dump:${chatId}:${dumpId}`;
-const DUMPS_SET_KEY = (chatId: number, date: string) => `dumps:${chatId}:${date}`;
-const CHECKIN_KEY = (chatId: number, date: string) => `checkin:${chatId}:${date}`;
+const DUMPS_SET_KEY = (chatId: number, date: string) =>
+  `dumps:${chatId}:${date}`;
+const CHECKIN_KEY = (chatId: number, date: string) =>
+  `checkin:${chatId}:${date}`;
 const CHECKINS_SET_KEY = (chatId: number) => `checkins:${chatId}`;
 const USER_PREFS_KEY = (chatId: number) => `user_prefs:${chatId}`;
 const AWAITING_CHECKIN_KEY = (chatId: number) => `awaiting_checkin:${chatId}`;
-const COMPLETED_TASKS_KEY = (chatId: number, date: string) => `completed:${chatId}:${date}`;
+const PENDING_FOLLOW_UP_KEY = (chatId: number) => `pending_follow_up:${chatId}`;
+const COMPLETED_TASKS_KEY = (chatId: number, date: string) =>
+  `completed:${chatId}:${date}`;
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -57,7 +61,10 @@ export async function createTask(
   return task;
 }
 
-export async function getTask(chatId: number, taskId: string): Promise<Task | null> {
+export async function getTask(
+  chatId: number,
+  taskId: string,
+): Promise<Task | null> {
   const redis = getClient();
   const data = await redis.get<string>(TASK_KEY(chatId, taskId));
   if (!data) return null;
@@ -69,7 +76,10 @@ export async function updateTask(task: Task): Promise<void> {
   await redis.set(TASK_KEY(task.chatId, task.id), JSON.stringify(task));
 }
 
-export async function completeTask(chatId: number, taskId: string): Promise<Task | null> {
+export async function completeTask(
+  chatId: number,
+  taskId: string,
+): Promise<Task | null> {
   const redis = getClient();
   const task = await getTask(chatId, taskId);
   if (!task) return null;
@@ -88,7 +98,10 @@ export async function completeTask(chatId: number, taskId: string): Promise<Task
   return task;
 }
 
-export async function deleteTask(chatId: number, taskId: string): Promise<Task | null> {
+export async function deleteTask(
+  chatId: number,
+  taskId: string,
+): Promise<Task | null> {
   const redis = getClient();
   const task = await getTask(chatId, taskId);
   if (!task) return null;
@@ -170,7 +183,10 @@ export async function findTasksByDescriptions(
 }
 
 // Brain dump operations
-export async function createBrainDump(chatId: number, content: string): Promise<BrainDump> {
+export async function createBrainDump(
+  chatId: number,
+  content: string,
+): Promise<BrainDump> {
   const redis = getClient();
   const id = generateId();
   const now = Date.now();
@@ -197,9 +213,14 @@ export async function getTodaysDumps(chatId: number): Promise<BrainDump[]> {
   return getDumpsByDate(chatId, getTodayKey());
 }
 
-export async function getDumpsByDate(chatId: number, dateKey: string): Promise<BrainDump[]> {
+export async function getDumpsByDate(
+  chatId: number,
+  dateKey: string,
+): Promise<BrainDump[]> {
   const redis = getClient();
-  const dumpIds = await redis.smembers<string[]>(DUMPS_SET_KEY(chatId, dateKey));
+  const dumpIds = await redis.smembers<string[]>(
+    DUMPS_SET_KEY(chatId, dateKey),
+  );
 
   if (!dumpIds || dumpIds.length === 0) return [];
 
@@ -230,7 +251,9 @@ export async function getWeeklyDumps(chatId: number): Promise<BrainDump[]> {
   return dumps.sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export async function getWeeklyCompletedTaskCount(chatId: number): Promise<number> {
+export async function getWeeklyCompletedTaskCount(
+  chatId: number,
+): Promise<number> {
   const redis = getClient();
   const today = new Date();
   let total = 0;
@@ -241,7 +264,8 @@ export async function getWeeklyCompletedTaskCount(chatId: number): Promise<numbe
     const dateKey = date.toISOString().split("T")[0];
     const count = await redis.get<number>(COMPLETED_TASKS_KEY(chatId, dateKey));
     if (count) {
-      total += typeof count === "number" ? count : parseInt(count as string, 10) || 0;
+      total +=
+        typeof count === "number" ? count : parseInt(count as string, 10) || 0;
     }
   }
 
@@ -282,7 +306,9 @@ export interface ConversationData {
   summaryUpdatedAt?: number; // When the summary was last updated
 }
 
-export async function getConversationData(chatId: number): Promise<ConversationData> {
+export async function getConversationData(
+  chatId: number,
+): Promise<ConversationData> {
   const redis = getClient();
   const key = CONVERSATION_KEY(chatId);
   const data = await redis.get<string>(key);
@@ -301,23 +327,33 @@ export async function getConversationData(chatId: number): Promise<ConversationD
   }
 }
 
-export async function getConversationHistory(chatId: number): Promise<ConversationMessage[]> {
+export async function getConversationHistory(
+  chatId: number,
+): Promise<ConversationMessage[]> {
   const data = await getConversationData(chatId);
   return data.messages;
 }
 
-export async function getConversationSummary(chatId: number): Promise<string | undefined> {
+export async function getConversationSummary(
+  chatId: number,
+): Promise<string | undefined> {
   const data = await getConversationData(chatId);
   return data.summary;
 }
 
 // Callback for triggering summarization (set by the caller to avoid circular imports)
 let summarizationCallback:
-  | ((messages: ConversationMessage[], existingSummary?: string) => Promise<string>)
+  | ((
+      messages: ConversationMessage[],
+      existingSummary?: string,
+    ) => Promise<string>)
   | null = null;
 
 export function setSummarizationCallback(
-  callback: (messages: ConversationMessage[], existingSummary?: string) => Promise<string>,
+  callback: (
+    messages: ConversationMessage[],
+    existingSummary?: string,
+  ) => Promise<string>,
 ): void {
   summarizationCallback = callback;
 }
@@ -424,7 +460,10 @@ export async function saveCheckIn(
   return checkIn;
 }
 
-export async function getCheckIn(chatId: number, date: string): Promise<CheckIn | null> {
+export async function getCheckIn(
+  chatId: number,
+  date: string,
+): Promise<CheckIn | null> {
   const redis = getClient();
   const data = await redis.get<string>(CHECKIN_KEY(chatId, date));
   if (!data) return null;
@@ -449,14 +488,18 @@ export async function getWeeklyCheckIns(chatId: number): Promise<CheckIn[]> {
 }
 
 // User preferences operations
-export async function getUserPreferences(chatId: number): Promise<UserPreferences | null> {
+export async function getUserPreferences(
+  chatId: number,
+): Promise<UserPreferences | null> {
   const redis = getClient();
   const data = await redis.get<string>(USER_PREFS_KEY(chatId));
   if (!data) return null;
   return typeof data === "string" ? JSON.parse(data) : data;
 }
 
-export async function saveUserPreferences(prefs: UserPreferences): Promise<void> {
+export async function saveUserPreferences(
+  prefs: UserPreferences,
+): Promise<void> {
   const redis = getClient();
   await redis.set(USER_PREFS_KEY(prefs.chatId), JSON.stringify(prefs));
 }
@@ -497,4 +540,50 @@ export async function isAwaitingCheckin(chatId: number): Promise<boolean> {
 export async function clearAwaitingCheckin(chatId: number): Promise<void> {
   const redis = getClient();
   await redis.del(AWAITING_CHECKIN_KEY(chatId));
+}
+
+// Pending follow-up tracking
+export interface PendingFollowUp {
+  taskId: string;
+  taskContent: string;
+  qstashMessageId: string;
+  scheduledAt: number;
+}
+
+const PENDING_FOLLOW_UP_TTL = 30 * 60; // 30 minutes
+
+export async function setPendingFollowUp(
+  chatId: number,
+  taskId: string,
+  taskContent: string,
+  qstashMessageId: string,
+): Promise<void> {
+  const redis = getClient();
+  const followUp: PendingFollowUp = {
+    taskId,
+    taskContent,
+    qstashMessageId,
+    scheduledAt: Date.now(),
+  };
+  await redis.set(PENDING_FOLLOW_UP_KEY(chatId), JSON.stringify(followUp), {
+    ex: PENDING_FOLLOW_UP_TTL,
+  });
+}
+
+export async function getPendingFollowUp(
+  chatId: number,
+): Promise<PendingFollowUp | null> {
+  const redis = getClient();
+  const data = await redis.get<string>(PENDING_FOLLOW_UP_KEY(chatId));
+  if (!data) return null;
+  return typeof data === "string" ? JSON.parse(data) : data;
+}
+
+export async function clearPendingFollowUp(
+  chatId: number,
+): Promise<PendingFollowUp | null> {
+  const redis = getClient();
+  const followUp = await getPendingFollowUp(chatId);
+  await redis.del(PENDING_FOLLOW_UP_KEY(chatId));
+  return followUp;
 }

@@ -144,7 +144,8 @@ export interface NotificationPayload {
     | "nag"
     | "daily_summary"
     | "daily_checkin"
-    | "weekly_summary";
+    | "weekly_summary"
+    | "follow_up";
 }
 
 // Daily check-in data

@@ -278,6 +278,36 @@ ${conversationSummary}
   }
 }
 
+export async function generateFollowUpMessage(
+  taskContent: string,
+): Promise<string> {
+  const client = getClient();
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 100,
+    messages: [
+      {
+        role: "system",
+        content: `${TAMA_PERSONALITY}
+
+Generate a very brief follow-up to a reminder you sent a few minutes ago. The user hasn't responded yet, so this is just a gentle "hey, still here" nudge. Keep it to one short sentence. Don't repeat the task details - just a soft check-in. Examples of tone: "Just making sure this reached you.", "Still here if you need me.", "Bumping this up in case it got buried."`,
+      },
+      {
+        role: "user",
+        content: `I sent a reminder about "${taskContent}" a few minutes ago but haven't heard back. Generate a brief follow-up.`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    return "Just checking this reached you.";
+  }
+
+  return content;
+}
+
 export async function generateNaggingMessage(
   task: Task,
   naggingLevel: number,

@@ -105,6 +105,12 @@ export default async function handler(
       return;
     }
 
+    // Cancel any pending follow-up since user has responded
+    const pendingFollowUp = await redis.clearPendingFollowUp(chatId);
+    if (pendingFollowUp?.qstashMessageId) {
+      await cancelScheduledMessage(pendingFollowUp.qstashMessageId);
+    }
+
     // Get conversation history, summary, and check-in state for context
     const [conversationData, isAwaitingCheckin] = await Promise.all([
       redis.getConversationData(chatId),

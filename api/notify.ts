@@ -2,16 +2,24 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { NotificationPayload } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import * as redis from "../lib/redis.js";
-import { scheduleReminder, verifySignature } from "../lib/qstash.js";
+import {
+  scheduleReminder,
+  scheduleFollowUp,
+  verifySignature,
+} from "../lib/qstash.js";
 import {
   generateNaggingMessage,
   generateDailySummary,
   calculateNextNagDelay,
   generateCheckinPrompt,
   generateWeeklyInsights,
+  generateFollowUpMessage,
 } from "../lib/llm.js";
 
-export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse,
+): Promise<void> {
   // Only accept POST requests
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -55,6 +63,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
         await handleWeeklySummary(payload);
         break;
 
+      case "follow_up":
+        await handleFollowUp(payload);
+        break;
+
       default:
         console.warn("Unknown notification type:", payload);
     }
@@ -81,6 +93,19 @@ async function handleReminder(payload: NotificationPayload): Promise<void> {
     chatId,
     `⏰ *Reminder:* ${task.content}\n\nReply "done" when you've finished!`,
   );
+
+  // Schedule a follow-up in 5-10 minutes in case user doesn't respond
+  try {
+    const followUpMessageId = await scheduleFollowUp(chatId, taskId);
+    await redis.setPendingFollowUp(
+      chatId,
+      taskId,
+      task.content,
+      followUpMessageId,
+    );
+  } catch (error) {
+    console.error("Failed to schedule follow-up:", error);
+  }
 
   // If important, schedule the first nag
   if (task.isImportant) {
@@ -162,7 +187,9 @@ async function handleDailyCheckin(payload: NotificationPayload): Promise<void> {
   await redis.markAwaitingCheckin(chatId);
 }
 
-async function handleWeeklySummary(payload: NotificationPayload): Promise<void> {
+async function handleWeeklySummary(
+  payload: NotificationPayload,
+): Promise<void> {
   const { chatId } = payload;
 
   // Get weekly check-ins and brain dumps
@@ -178,7 +205,38 @@ async function handleWeeklySummary(payload: NotificationPayload): Promise<void> 
   }
 
   // Generate weekly insights
-  const insights = await generateWeeklyInsights(checkIns, dumps, completedTaskCount);
+  const insights = await generateWeeklyInsights(
+    checkIns,
+    dumps,
+    completedTaskCount,
+  );
 
   await telegram.sendMessage(chatId, insights);
+}
+
+async function handleFollowUp(payload: NotificationPayload): Promise<void> {
+  const { chatId, taskId } = payload;
+
+  // Check if there's still a pending follow-up (user hasn't responded)
+  const pendingFollowUp = await redis.getPendingFollowUp(chatId);
+
+  if (!pendingFollowUp || pendingFollowUp.taskId !== taskId) {
+    // User already responded or follow-up was cancelled, skip
+    return;
+  }
+
+  // Get the task to make sure it's still pending
+  const task = await redis.getTask(chatId, taskId);
+  if (!task || task.status === "completed") {
+    // Task was completed, no follow-up needed
+    await redis.clearPendingFollowUp(chatId);
+    return;
+  }
+
+  // Generate and send a gentle follow-up message
+  const followUpMessage = await generateFollowUpMessage(task.content);
+  await telegram.sendMessage(chatId, followUpMessage);
+
+  // Clear the pending follow-up (we only send one follow-up per reminder)
+  await redis.clearPendingFollowUp(chatId);
 }
