@@ -205,7 +205,42 @@ Possible intents:
    - Extract hour (0-23) and minute (0-59)
    - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
 
-10. "conversation" - General chat or unclear intent
+10. "reminder_with_list" - User wants a reminder AND is providing a list of items
+    - Triggers when they mention multiple items to remember (shopping list, packing, errands, etc.)
+    - Extract a general task description for the reminder
+    - Extract or infer a list name from context (e.g., "groceries", "packing", "birthday gifts")
+    - Extract individual items as an array
+    - Examples:
+      - "remind me to buy bread, eggs, and cereal tomorrow"
+        -> task: "buy groceries", listName: "Groceries", items: ["bread", "eggs", "cereal"]
+      - "at 5pm remind me to pack laptop, charger, and notebook"
+        -> task: "pack for trip", listName: "Packing", items: ["laptop", "charger", "notebook"]
+
+11. "create_list" - User wants to create a standalone list without a reminder
+    - Keywords: "make a list", "create a list", "start a list", "list for me"
+    - No time/reminder component
+    - Examples:
+      - "make a list of birthday gifts - tv for mom, switch for brother"
+      - "I'm thinking about movies to watch: inception, interstellar, tenet"
+
+12. "show_lists" - User wants to see all their lists
+    - Keywords: "show lists", "my lists", "what lists", "all lists"
+
+13. "show_list" - User wants to see a specific list
+    - Keywords: "show the grocery list", "what's on my packing list"
+    - Include listDescription for fuzzy matching
+
+14. "modify_list" - User wants to change an existing list
+    - Add items: "add milk to my grocery list"
+    - Remove items: "remove bread from shopping list"
+    - Check items: "check off eggs", "got the bread"
+    - Uncheck items: "uncheck milk"
+    - Rename: "rename grocery list to shopping"
+
+15. "delete_list" - User wants to delete a list
+    - Keywords: "delete the list", "remove my list", "get rid of list"
+
+16. "conversation" - General chat or unclear intent
    - Provide a warm, low-pressure response in Tama's voice (cozy cat-girl companion)
    - Keep responses to 1-2 short sentences, soft and conversational
    - If you can't determine the intent, gently ask clarifying questions
@@ -215,11 +250,17 @@ Possible intents:
 Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
 - multiple_reminders: {"type": "multiple_reminders", "reminders": [{"task": "description", "delayMinutes": number, "isImportant": boolean}, ...]}
+- reminder_with_list: {"type": "reminder_with_list", "task": "description", "listName": "name", "items": ["item1", "item2"], "delayMinutes": number, "isImportant": boolean}
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
 - cancel_task: {"type": "cancel_task", "taskDescription": "optional description to match"}
 - cancel_multiple_tasks: {"type": "cancel_multiple_tasks", "taskDescriptions": ["description1", "description2", ...]}
 - list_tasks: {"type": "list_tasks"}
+- create_list: {"type": "create_list", "name": "list name", "items": ["item1", "item2"]}
+- show_lists: {"type": "show_lists"}
+- show_list: {"type": "show_list", "listDescription": "optional fuzzy match"}
+- modify_list: {"type": "modify_list", "listDescription": "optional", "action": "add_items|remove_items|check_items|uncheck_items|rename", "items": ["item1"], "newName": "optional"}
+- delete_list: {"type": "delete_list", "listDescription": "optional fuzzy match"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
 - conversation: {"type": "conversation", "response": "your message to the user"}
@@ -645,7 +686,43 @@ export type ActionContext =
   | { type: "no_tasks" }
   | { type: "task_not_found"; action: "done" | "cancel" }
   | { type: "checkin_logged"; rating: number; hasNotes: boolean }
-  | { type: "checkin_time_set"; timeStr: string };
+  | { type: "checkin_time_set"; timeStr: string }
+  | {
+      type: "reminder_with_list_created";
+      task: string;
+      timeStr: string;
+      listName: string;
+      itemCount: number;
+      isImportant: boolean;
+    }
+  | { type: "list_created"; name: string; itemCount: number }
+  | {
+      type: "lists_shown";
+      lists: {
+        name: string;
+        itemCount: number;
+        checkedCount: number;
+        hasReminder: boolean;
+      }[];
+    }
+  | {
+      type: "list_shown";
+      name: string;
+      items: { content: string; isChecked: boolean }[];
+      linkedTaskContent?: string;
+      linkedTaskTimeStr?: string;
+    }
+  | { type: "no_lists" }
+  | { type: "list_not_found" }
+  | {
+      type: "list_modified";
+      name: string;
+      action: string;
+      items?: string[];
+      newName?: string;
+    }
+  | { type: "list_deleted"; name: string }
+  | { type: "task_completed_with_list"; task: string; listName: string };
 
 export async function generateActionResponse(
   actionContext: ActionContext,
@@ -702,6 +779,61 @@ export async function generateActionResponse(
     case "checkin_time_set":
       prompt = `The user just set their daily check-in time to ${actionContext.timeStr}. They'll also get a daily summary and weekly summary on Sundays at this time. Confirm this briefly.`;
       break;
+    case "reminder_with_list_created":
+      prompt = `The user just set a reminder for "${actionContext.task}" in ${actionContext.timeStr}, with a linked list called "${actionContext.listName}" containing ${actionContext.itemCount} items.${actionContext.isImportant ? " They marked it as important." : ""} Acknowledge warmly - mention both the reminder and that you're keeping track of the list items.`;
+      break;
+    case "list_created":
+      prompt = `The user just created a list called "${actionContext.name}" with ${actionContext.itemCount} items. Acknowledge briefly that the list is saved.`;
+      break;
+    case "lists_shown": {
+      const listSummaries = actionContext.lists
+        .map(
+          (l) =>
+            `- "${l.name}": ${l.itemCount} items (${l.checkedCount} checked)${l.hasReminder ? " - has reminder" : ""}`,
+        )
+        .join("\n");
+      prompt = `Show the user their lists. Here they are:\n${listSummaries}\n\nPresent this in a clear, warm way.`;
+      break;
+    }
+    case "list_shown": {
+      const itemsList = actionContext.items
+        .map((i) => `- [${i.isChecked ? "x" : " "}] ${i.content}`)
+        .join("\n");
+      const reminderInfo = actionContext.linkedTaskContent
+        ? `\nThis list is linked to a reminder: "${actionContext.linkedTaskContent}" (${actionContext.linkedTaskTimeStr})`
+        : "";
+      prompt = `Show the user their "${actionContext.name}" list:\n${itemsList}${reminderInfo}\n\nPresent this clearly.`;
+      break;
+    }
+    case "no_lists":
+      prompt = `The user has no lists yet. Let them know warmly - they can create one anytime.`;
+      break;
+    case "list_not_found":
+      prompt = `The user tried to access a list but I couldn't find a matching one. Gently let them know and suggest they say "show my lists" to see what's available.`;
+      break;
+    case "list_modified": {
+      const itemsStr = actionContext.items?.join(", ") || "";
+      if (actionContext.action === "add_items") {
+        prompt = `Added ${itemsStr} to the "${actionContext.name}" list. Acknowledge briefly.`;
+      } else if (actionContext.action === "remove_items") {
+        prompt = `Removed ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly.`;
+      } else if (actionContext.action === "check_items") {
+        prompt = `Checked off ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly - maybe a small "nice" for progress.`;
+      } else if (actionContext.action === "uncheck_items") {
+        prompt = `Unchecked ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly.`;
+      } else if (actionContext.action === "rename") {
+        prompt = `Renamed the list from "${actionContext.name}" to "${actionContext.newName}". Acknowledge briefly.`;
+      } else {
+        prompt = `Modified the "${actionContext.name}" list. Acknowledge briefly.`;
+      }
+      break;
+    }
+    case "list_deleted":
+      prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally - it's okay to clean up.`;
+      break;
+    case "task_completed_with_list":
+      prompt = `The user just completed "${actionContext.task}" which had a linked list "${actionContext.listName}". Both the task and list are now done. Give a calm acknowledgment.`;
+      break;
   }
 
   const systemPrompt = `${TAMA_PERSONALITY}
@@ -742,6 +874,26 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Logged your check-in: ${actionContext.rating}/5.`;
       case "checkin_time_set":
         return `Check-in time set to ${actionContext.timeStr}.`;
+      case "reminder_with_list_created":
+        return `Got it, I'll remind you about ${actionContext.task} in ${actionContext.timeStr}. Keeping track of ${actionContext.itemCount} items on your ${actionContext.listName} list.`;
+      case "list_created":
+        return `Created your ${actionContext.name} list with ${actionContext.itemCount} items.`;
+      case "lists_shown":
+        return actionContext.lists
+          .map((l) => `• ${l.name} (${l.itemCount} items)`)
+          .join("\n");
+      case "list_shown":
+        return `${actionContext.name}:\n${actionContext.items.map((i) => `${i.isChecked ? "✓" : "○"} ${i.content}`).join("\n")}`;
+      case "no_lists":
+        return `You don't have any lists yet.`;
+      case "list_not_found":
+        return `Couldn't find that list. Say "show my lists" to see what's available.`;
+      case "list_modified":
+        return `Updated your ${actionContext.name} list.`;
+      case "list_deleted":
+        return `Deleted the ${actionContext.name} list.`;
+      case "task_completed_with_list":
+        return `Done with ${actionContext.task} and checked off the ${actionContext.listName} list.`;
     }
   }
 

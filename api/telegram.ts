@@ -1,5 +1,14 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import type { TelegramUpdate, Intent, ReminderItem } from "../lib/types.js";
+import type {
+  TelegramUpdate,
+  Intent,
+  ReminderItem,
+  ReminderWithListIntent,
+  CreateListIntent,
+  ShowListIntent,
+  ModifyListIntent,
+  DeleteListIntent,
+} from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import {
@@ -182,6 +191,24 @@ async function handleIntent(
     case "list_tasks":
       return await handleListTasks(chatId, context);
 
+    case "reminder_with_list":
+      return await handleReminderWithList(chatId, intent, context);
+
+    case "create_list":
+      return await handleCreateList(chatId, intent, context);
+
+    case "show_lists":
+      return await handleShowLists(chatId, context);
+
+    case "show_list":
+      return await handleShowList(chatId, intent, context);
+
+    case "modify_list":
+      return await handleModifyList(chatId, intent, context);
+
+    case "delete_list":
+      return await handleDeleteList(chatId, intent, context);
+
     case "conversation":
       await telegram.sendMessage(chatId, intent.response);
       return intent.response;
@@ -348,8 +375,31 @@ async function handleMarkDone(
     await cancelScheduledMessage(task.qstashMessageId);
   }
 
+  // Complete the linked list if exists
+  let linkedListName: string | undefined;
+  if (task.linkedListId) {
+    const list = await redis.completeList(chatId, task.linkedListId);
+    if (list) {
+      linkedListName = list.name;
+    }
+  }
+
   // Complete the task
   await redis.completeTask(chatId, task.id);
+
+  // Use different response type if there was a linked list
+  if (linkedListName) {
+    const response = await generateActionResponse(
+      {
+        type: "task_completed_with_list",
+        task: task.content,
+        listName: linkedListName,
+      },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
 
   const response = await generateActionResponse(
     {
@@ -388,6 +438,15 @@ async function handleCancelTask(
   // Cancel any scheduled reminder/nag for this task
   if (task.qstashMessageId) {
     await cancelScheduledMessage(task.qstashMessageId);
+  }
+
+  // If task has a linked list, unlink it (keep the list as standalone)
+  if (task.linkedListId) {
+    const list = await redis.getList(chatId, task.linkedListId);
+    if (list) {
+      list.linkedTaskId = undefined;
+      await redis.updateList(list);
+    }
   }
 
   // Delete the task
@@ -475,6 +534,288 @@ async function handleListTasks(
     {
       type: "task_list",
       tasks: taskList,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleReminderWithList(
+  chatId: number,
+  intent: ReminderWithListIntent,
+  context: ConversationContext,
+): Promise<string> {
+  // Create the list first
+  const list = await redis.createList(chatId, intent.listName, intent.items);
+
+  // Create the task with linked list
+  const task = await redis.createTask(
+    chatId,
+    intent.task,
+    intent.isImportant,
+    intent.delayMinutes,
+  );
+
+  // Link the task to the list
+  task.linkedListId = list.id;
+  await redis.updateTask(task);
+
+  // Update list with task link
+  list.linkedTaskId = task.id;
+  await redis.updateList(list);
+
+  // Schedule the reminder via QStash
+  try {
+    const messageId = await scheduleReminder(
+      chatId,
+      task.id,
+      intent.delayMinutes,
+      false,
+    );
+    task.qstashMessageId = messageId;
+    await redis.updateTask(task);
+  } catch (error) {
+    console.error("Failed to schedule QStash reminder:", error);
+  }
+
+  const timeStr = formatDelay(intent.delayMinutes);
+
+  const response = await generateActionResponse(
+    {
+      type: "reminder_with_list_created",
+      task: intent.task,
+      timeStr,
+      listName: intent.listName,
+      itemCount: intent.items.length,
+      isImportant: intent.isImportant,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleCreateList(
+  chatId: number,
+  intent: CreateListIntent,
+  context: ConversationContext,
+): Promise<string> {
+  const list = await redis.createList(chatId, intent.name, intent.items);
+
+  const response = await generateActionResponse(
+    {
+      type: "list_created",
+      name: list.name,
+      itemCount: list.items.length,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleShowLists(
+  chatId: number,
+  context: ConversationContext,
+): Promise<string> {
+  const lists = await redis.getActiveLists(chatId);
+
+  if (lists.length === 0) {
+    const response = await generateActionResponse(
+      { type: "no_lists" },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  const listSummaries = lists.map((list) => ({
+    name: list.name,
+    itemCount: list.items.length,
+    checkedCount: list.items.filter((i) => i.isChecked).length,
+    hasReminder: !!list.linkedTaskId,
+  }));
+
+  const response = await generateActionResponse(
+    {
+      type: "lists_shown",
+      lists: listSummaries,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleShowList(
+  chatId: number,
+  intent: ShowListIntent,
+  context: ConversationContext,
+): Promise<string> {
+  const list = await redis.findListByDescription(
+    chatId,
+    intent.listDescription,
+  );
+
+  if (!list) {
+    const response = await generateActionResponse(
+      { type: "list_not_found" },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // Get linked task info if exists
+  let linkedTaskContent: string | undefined;
+  let linkedTaskTimeStr: string | undefined;
+  if (list.linkedTaskId) {
+    const task = await redis.getTask(chatId, list.linkedTaskId);
+    if (task) {
+      linkedTaskContent = task.content;
+      linkedTaskTimeStr = formatFutureTime(task.nextReminder);
+    }
+  }
+
+  const response = await generateActionResponse(
+    {
+      type: "list_shown",
+      name: list.name,
+      items: list.items.map((i) => ({
+        content: i.content,
+        isChecked: i.isChecked,
+      })),
+      linkedTaskContent,
+      linkedTaskTimeStr,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleModifyList(
+  chatId: number,
+  intent: ModifyListIntent,
+  context: ConversationContext,
+): Promise<string> {
+  const list = await redis.findListByDescription(
+    chatId,
+    intent.listDescription,
+  );
+
+  if (!list) {
+    const response = await generateActionResponse(
+      { type: "list_not_found" },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  let modifiedItems: string[] = [];
+
+  switch (intent.action) {
+    case "add_items":
+      if (intent.items && intent.items.length > 0) {
+        await redis.addListItems(chatId, list.id, intent.items);
+        modifiedItems = intent.items;
+      }
+      break;
+    case "remove_items":
+      if (intent.items && intent.items.length > 0) {
+        const result = await redis.removeListItems(
+          chatId,
+          list.id,
+          intent.items,
+        );
+        if (result) {
+          modifiedItems = result.removedItems;
+        }
+      }
+      break;
+    case "check_items":
+      if (intent.items && intent.items.length > 0) {
+        const result = await redis.checkListItems(
+          chatId,
+          list.id,
+          intent.items,
+          true,
+        );
+        if (result) {
+          modifiedItems = result.modifiedItems;
+        }
+      }
+      break;
+    case "uncheck_items":
+      if (intent.items && intent.items.length > 0) {
+        const result = await redis.checkListItems(
+          chatId,
+          list.id,
+          intent.items,
+          false,
+        );
+        if (result) {
+          modifiedItems = result.modifiedItems;
+        }
+      }
+      break;
+    case "rename":
+      if (intent.newName) {
+        await redis.renameList(chatId, list.id, intent.newName);
+      }
+      break;
+  }
+
+  const response = await generateActionResponse(
+    {
+      type: "list_modified",
+      name: list.name,
+      action: intent.action,
+      items: modifiedItems.length > 0 ? modifiedItems : undefined,
+      newName: intent.newName,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleDeleteList(
+  chatId: number,
+  intent: DeleteListIntent,
+  context: ConversationContext,
+): Promise<string> {
+  const list = await redis.findListByDescription(
+    chatId,
+    intent.listDescription,
+  );
+
+  if (!list) {
+    const response = await generateActionResponse(
+      { type: "list_not_found" },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // If linked to a task, unlink it
+  if (list.linkedTaskId) {
+    const task = await redis.getTask(chatId, list.linkedTaskId);
+    if (task) {
+      task.linkedListId = undefined;
+      await redis.updateTask(task);
+    }
+  }
+
+  await redis.deleteList(chatId, list.id);
+
+  const response = await generateActionResponse(
+    {
+      type: "list_deleted",
+      name: list.name,
     },
     context,
   );

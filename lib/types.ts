@@ -47,11 +47,17 @@ export interface TelegramFile {
 export type Intent =
   | ReminderIntent
   | MultipleRemindersIntent
+  | ReminderWithListIntent
   | BrainDumpIntent
   | MarkDoneIntent
   | CancelTaskIntent
   | CancelMultipleTasksIntent
   | ListTasksIntent
+  | CreateListIntent
+  | ShowListsIntent
+  | ShowListIntent
+  | ModifyListIntent
+  | DeleteListIntent
   | ConversationIntent
   | CheckinResponseIntent
   | SetCheckinTimeIntent;
@@ -115,6 +121,49 @@ export interface SetCheckinTimeIntent {
   minute: number;
 }
 
+// List intent types
+export interface ReminderWithListIntent {
+  type: "reminder_with_list";
+  task: string;
+  listName: string;
+  items: string[];
+  delayMinutes: number;
+  isImportant: boolean;
+}
+
+export interface CreateListIntent {
+  type: "create_list";
+  name: string;
+  items: string[];
+}
+
+export interface ShowListsIntent {
+  type: "show_lists";
+}
+
+export interface ShowListIntent {
+  type: "show_list";
+  listDescription?: string;
+}
+
+export interface ModifyListIntent {
+  type: "modify_list";
+  listDescription?: string;
+  action:
+    | "add_items"
+    | "remove_items"
+    | "check_items"
+    | "uncheck_items"
+    | "rename";
+  items?: string[];
+  newName?: string;
+}
+
+export interface DeleteListIntent {
+  type: "delete_list";
+  listDescription?: string;
+}
+
 // Data models for Redis
 export interface Task {
   id: string;
@@ -124,8 +173,27 @@ export interface Task {
   naggingLevel: number;
   nextReminder: number;
   qstashMessageId?: string;
+  linkedListId?: string;
   createdAt: number;
   status: "pending" | "completed";
+}
+
+export interface ListItem {
+  id: string;
+  content: string;
+  isChecked: boolean;
+  createdAt: number;
+}
+
+export interface List {
+  id: string;
+  chatId: number;
+  name: string;
+  items: ListItem[];
+  linkedTaskId?: string;
+  createdAt: number;
+  updatedAt: number;
+  status: "active" | "completed";
 }
 
 export interface BrainDump {

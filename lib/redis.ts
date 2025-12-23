@@ -1,5 +1,12 @@
 import { Redis } from "@upstash/redis";
-import type { Task, BrainDump, CheckIn, UserPreferences } from "./types.js";
+import type {
+  Task,
+  BrainDump,
+  CheckIn,
+  UserPreferences,
+  List,
+  ListItem,
+} from "./types.js";
 
 let redisClient: Redis | null = null;
 
@@ -24,6 +31,10 @@ const AWAITING_CHECKIN_KEY = (chatId: number) => `awaiting_checkin:${chatId}`;
 const PENDING_FOLLOW_UP_KEY = (chatId: number) => `pending_follow_up:${chatId}`;
 const COMPLETED_TASKS_KEY = (chatId: number, date: string) =>
   `completed:${chatId}:${date}`;
+
+// List key patterns
+const LIST_KEY = (chatId: number, listId: string) => `list:${chatId}:${listId}`;
+const LISTS_SET_KEY = (chatId: number) => `lists:${chatId}`;
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
@@ -180,6 +191,224 @@ export async function findTasksByDescriptions(
   }
 
   return matchedTasks;
+}
+
+// List operations
+export async function createList(
+  chatId: number,
+  name: string,
+  itemContents: string[],
+  linkedTaskId?: string,
+): Promise<List> {
+  const redis = getClient();
+  const id = generateId();
+  const now = Date.now();
+
+  const items: ListItem[] = itemContents.map((content) => ({
+    id: generateId(),
+    content,
+    isChecked: false,
+    createdAt: now,
+  }));
+
+  const list: List = {
+    id,
+    chatId,
+    name,
+    items,
+    linkedTaskId,
+    createdAt: now,
+    updatedAt: now,
+    status: "active",
+  };
+
+  await redis.set(LIST_KEY(chatId, id), JSON.stringify(list));
+  await redis.sadd(LISTS_SET_KEY(chatId), id);
+
+  return list;
+}
+
+export async function getList(
+  chatId: number,
+  listId: string,
+): Promise<List | null> {
+  const redis = getClient();
+  const data = await redis.get<string>(LIST_KEY(chatId, listId));
+  if (!data) return null;
+  return typeof data === "string" ? JSON.parse(data) : data;
+}
+
+export async function updateList(list: List): Promise<void> {
+  const redis = getClient();
+  list.updatedAt = Date.now();
+  await redis.set(LIST_KEY(list.chatId, list.id), JSON.stringify(list));
+}
+
+export async function deleteList(
+  chatId: number,
+  listId: string,
+): Promise<List | null> {
+  const redis = getClient();
+  const list = await getList(chatId, listId);
+  if (!list) return null;
+
+  await redis.srem(LISTS_SET_KEY(chatId), listId);
+  await redis.del(LIST_KEY(chatId, listId));
+
+  return list;
+}
+
+export async function getActiveLists(chatId: number): Promise<List[]> {
+  const redis = getClient();
+  const listIds = await redis.smembers<string[]>(LISTS_SET_KEY(chatId));
+
+  if (!listIds || listIds.length === 0) return [];
+
+  const lists: List[] = [];
+  for (const listId of listIds) {
+    const list = await getList(chatId, listId);
+    if (list && list.status === "active") {
+      lists.push(list);
+    }
+  }
+
+  return lists.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function findListByDescription(
+  chatId: number,
+  description?: string,
+): Promise<List | null> {
+  const lists = await getActiveLists(chatId);
+  if (lists.length === 0) return null;
+
+  // If no description, return the most recently updated list
+  if (!description) {
+    return lists[0];
+  }
+
+  // Try to find a matching list (fuzzy match on name)
+  const normalizedDesc = description.toLowerCase();
+  const matchedList = lists.find(
+    (l) =>
+      l.name.toLowerCase().includes(normalizedDesc) ||
+      normalizedDesc.includes(l.name.toLowerCase()),
+  );
+
+  return matchedList || null;
+}
+
+export async function completeList(
+  chatId: number,
+  listId: string,
+): Promise<List | null> {
+  const list = await getList(chatId, listId);
+  if (!list) return null;
+
+  list.status = "completed";
+  // Check all items
+  list.items = list.items.map((item) => ({ ...item, isChecked: true }));
+  await updateList(list);
+
+  // Remove from active lists set
+  const redis = getClient();
+  await redis.srem(LISTS_SET_KEY(chatId), listId);
+
+  return list;
+}
+
+export async function addListItems(
+  chatId: number,
+  listId: string,
+  itemContents: string[],
+): Promise<List | null> {
+  const list = await getList(chatId, listId);
+  if (!list || list.status !== "active") return null;
+
+  const now = Date.now();
+  const newItems: ListItem[] = itemContents.map((content) => ({
+    id: generateId(),
+    content,
+    isChecked: false,
+    createdAt: now,
+  }));
+
+  list.items.push(...newItems);
+  await updateList(list);
+
+  return list;
+}
+
+export async function removeListItems(
+  chatId: number,
+  listId: string,
+  itemDescriptions: string[],
+): Promise<{ list: List; removedItems: string[] } | null> {
+  const list = await getList(chatId, listId);
+  if (!list || list.status !== "active") return null;
+
+  const removedItems: string[] = [];
+  const normalizedDescriptions = itemDescriptions.map((d) => d.toLowerCase());
+
+  list.items = list.items.filter((item) => {
+    const normalizedContent = item.content.toLowerCase();
+    const shouldRemove = normalizedDescriptions.some(
+      (desc) =>
+        normalizedContent.includes(desc) || desc.includes(normalizedContent),
+    );
+    if (shouldRemove) {
+      removedItems.push(item.content);
+    }
+    return !shouldRemove;
+  });
+
+  await updateList(list);
+
+  return { list, removedItems };
+}
+
+export async function checkListItems(
+  chatId: number,
+  listId: string,
+  itemDescriptions: string[],
+  checked: boolean,
+): Promise<{ list: List; modifiedItems: string[] } | null> {
+  const list = await getList(chatId, listId);
+  if (!list || list.status !== "active") return null;
+
+  const modifiedItems: string[] = [];
+  const normalizedDescriptions = itemDescriptions.map((d) => d.toLowerCase());
+
+  list.items = list.items.map((item) => {
+    const normalizedContent = item.content.toLowerCase();
+    const shouldModify = normalizedDescriptions.some(
+      (desc) =>
+        normalizedContent.includes(desc) || desc.includes(normalizedContent),
+    );
+    if (shouldModify && item.isChecked !== checked) {
+      modifiedItems.push(item.content);
+      return { ...item, isChecked: checked };
+    }
+    return item;
+  });
+
+  await updateList(list);
+
+  return { list, modifiedItems };
+}
+
+export async function renameList(
+  chatId: number,
+  listId: string,
+  newName: string,
+): Promise<List | null> {
+  const list = await getList(chatId, listId);
+  if (!list || list.status !== "active") return null;
+
+  list.name = newName;
+  await updateList(list);
+
+  return list;
 }
 
 // Brain dump operations
