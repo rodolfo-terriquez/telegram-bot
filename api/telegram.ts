@@ -639,8 +639,48 @@ async function handleDebugCommand(chatId: number): Promise<void> {
   const conversationData = await redis.getConversationData(chatId);
   const { messages, summary, summaryUpdatedAt } = conversationData;
 
-  // Build the markdown document
+  // Get current time context (same as LLM gets)
+  const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
   const now = new Date();
+  const formattedTime = now.toLocaleString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZone: timezone,
+    timeZoneName: "short",
+  });
+
+  // Tama personality (copied from lib/llm.ts to show exact text)
+  const tamaPersonality = `You are Tama, a cozy cat-girl companion designed to support a user with ADHD.
+
+Your role is not to manage, coach, or supervise. You are a calm, non-judgmental companion who helps by offering presence, structure, and gentle nudges.
+
+Personality:
+- Be warm, patient, and low-pressure
+- Treat forgetfulness, procrastination, and task avoidance as neutral facts
+- Never shame, scold, guilt, or pressure
+- Never imply moral value in productivity
+
+Communication style:
+- Default to 1-2 short sentences
+- Use soft, conversational language
+- Prefer "maybe," "if you want," "we could"
+- Avoid absolutes ("must," "always," "never")
+- Avoid exclamation points except for small, quiet celebrations
+- Emoji use is rare and minimal
+
+Reminders should be framed as soft nudges, never commands. Instead of "You should..." or "Don't forget...", say things like "Just a soft reminder..." or "This came up again, in case now's better."
+
+Treat missed or abandoned tasks as neutral. Always offer dropping the task as a valid option.
+
+Keep celebrations calm and proportional: "Nice. That counts." or "Good stopping point."`;
+
+  // Build the markdown document
   const lines: string[] = [
     "# Context Stack Debug",
     "",
@@ -649,30 +689,52 @@ async function handleDebugCommand(chatId: number): Promise<void> {
     "",
     "---",
     "",
+    "## 1. Current Time Context",
+    "",
+    "```",
+    `CURRENT TIME: ${formattedTime} (User timezone: ${timezone})`,
+    "```",
+    "",
+    "---",
+    "",
+    "## 2. Tama Personality",
+    "",
+    "```",
+    tamaPersonality,
+    "```",
+    "",
+    "---",
+    "",
+    "## 3. Conversation Summary",
+    "",
   ];
 
-  // Summary section
-  lines.push("## Summary");
-  lines.push("");
   if (summary) {
+    lines.push("```");
+    lines.push("---CONVERSATION CONTEXT---");
+    lines.push(
+      "The following is a summary of your recent conversation with this user. Use this to inform your tone and any references to previous discussions:",
+    );
+    lines.push("");
+    lines.push(summary);
+    lines.push("---END CONTEXT---");
+    lines.push("```");
     if (summaryUpdatedAt) {
       const summaryDate = new Date(summaryUpdatedAt);
-      lines.push(`*Last updated: ${summaryDate.toISOString()}*`);
       lines.push("");
+      lines.push(`*Last updated: ${summaryDate.toISOString()}*`);
     }
-    lines.push(summary);
   } else {
     lines.push("*No summary yet - conversation has not been summarized.*");
   }
+
   lines.push("");
   lines.push("---");
   lines.push("");
-
-  // Recent messages section
-  lines.push("## Recent Messages");
+  lines.push("## 4. Recent Messages");
   lines.push("");
   lines.push(
-    `**Total messages:** ${messages.length} (${Math.floor(messages.length / 2)} pairs)`,
+    `**Total:** ${messages.length} messages (${Math.floor(messages.length / 2)} pairs)`,
   );
   lines.push("");
 
@@ -681,13 +743,21 @@ async function handleDebugCommand(chatId: number): Promise<void> {
   } else {
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
-      const timestamp = new Date(msg.timestamp).toISOString();
-      const roleLabel = msg.role === "user" ? "**User**" : "**Assistant**";
+      const msgTime = new Date(msg.timestamp).toLocaleString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: timezone,
+      });
+      const roleLabel = msg.role === "user" ? "User" : "Assistant";
 
-      lines.push(`### ${i + 1}. ${roleLabel}`);
-      lines.push(`*${timestamp}*`);
-      lines.push("");
+      lines.push(`**${roleLabel}** @ ${msgTime}`);
+      lines.push("```");
       lines.push(msg.content);
+      lines.push("```");
       lines.push("");
     }
   }
