@@ -368,6 +368,40 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
   return content;
 }
 
+export async function generateOverdueTasksReview(
+  overdueTasks: { content: string; overdueBy: string }[],
+): Promise<string> {
+  const client = getClient();
+
+  const taskList = overdueTasks
+    .map((t) => `- "${t.content}" (overdue by ${t.overdueBy})`)
+    .join("\n");
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 300,
+    messages: [
+      {
+        role: "system",
+        content: `${TAMA_PERSONALITY}
+
+Generate an end-of-day review message for overdue tasks. The user has tasks that were due earlier but haven't been completed or acknowledged. Present them gently and offer options: they can mark tasks done, reschedule them for tomorrow, or drop them entirely. Frame dropping tasks as a valid and healthy option. Keep it warm but concise. Don't use numbered lists - just present the tasks naturally.`,
+      },
+      {
+        role: "user",
+        content: `Here are the overdue tasks to review:\n${taskList}\n\nGenerate a gentle end-of-day review message.`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    return `A few things slipped by today. No worries - you can mark them done, reschedule, or drop them if they're no longer relevant.`;
+  }
+
+  return content;
+}
+
 export async function generateNaggingMessage(
   task: Task,
   naggingLevel: number,

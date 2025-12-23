@@ -163,6 +163,31 @@ export async function scheduleFollowUp(
   return result.messageId;
 }
 
+export async function scheduleOverdueReview(
+  chatId: number,
+  cronExpression: string = "0 21 * * *", // 9 PM daily by default
+): Promise<string> {
+  const client = getClient();
+  const notifyUrl = getNotifyUrl();
+
+  const payload: NotificationPayload = {
+    chatId,
+    taskId: "",
+    type: "overdue_review",
+  };
+
+  const schedule = await client.schedules.create({
+    destination: notifyUrl,
+    cron: cronExpression,
+    body: JSON.stringify(payload),
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  return schedule.scheduleId;
+}
+
 export async function deleteSchedule(scheduleId: string): Promise<void> {
   const client = getClient();
   try {

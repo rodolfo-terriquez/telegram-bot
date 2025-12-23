@@ -145,7 +145,8 @@ export interface NotificationPayload {
     | "daily_summary"
     | "daily_checkin"
     | "weekly_summary"
-    | "follow_up";
+    | "follow_up"
+    | "overdue_review";
 }
 
 // Daily check-in data
@@ -165,4 +166,5 @@ export interface UserPreferences {
   checkinScheduleId?: string;
   weeklySummaryScheduleId?: string;
   dailySummaryScheduleId?: string;
+  overdueReviewScheduleId?: string;
 }

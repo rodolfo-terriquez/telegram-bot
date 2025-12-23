@@ -13,6 +13,7 @@ import {
   scheduleDailyCheckin,
   scheduleWeeklySummary,
   scheduleDailySummary,
+  scheduleOverdueReview,
   deleteSchedule,
   cancelScheduledMessage,
 } from "../lib/qstash.js";
@@ -443,8 +444,25 @@ function formatFutureTime(timestamp: number): string {
   const now = Date.now();
   const diff = timestamp - now;
 
+  // Handle overdue tasks - show how long ago
   if (diff <= 0) {
-    return "any moment now";
+    const elapsed = Math.abs(diff);
+    const minutes = Math.floor(elapsed / 60000);
+
+    if (minutes < 1) {
+      return "just now";
+    }
+    if (minutes < 60) {
+      return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+    }
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+      return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+    }
+
+    const days = Math.floor(hours / 24);
+    return `${days} day${days === 1 ? "" : "s"} ago`;
   }
 
   const minutes = Math.floor(diff / 60000);
@@ -499,12 +517,19 @@ async function handleSetCheckinTime(
   if (existingPrefs?.dailySummaryScheduleId) {
     await deleteSchedule(existingPrefs.dailySummaryScheduleId);
   }
+  if (existingPrefs?.overdueReviewScheduleId) {
+    await deleteSchedule(existingPrefs.overdueReviewScheduleId);
+  }
 
   // Create new cron expressions (minute hour * * *)
   const cronExpression = `${minute} ${hour} * * *`;
   const weeklyCron = `${minute} ${hour} * * 0`; // Same time on Sundays
 
-  // Schedule new check-in, daily summary, and weekly summary
+  // Overdue review 1 hour after check-in time
+  const overdueReviewHour = (hour + 1) % 24;
+  const overdueReviewCron = `${minute} ${overdueReviewHour} * * *`;
+
+  // Schedule new check-in, daily summary, weekly summary, and overdue review
   const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
   const dailySummaryScheduleId = await scheduleDailySummary(
     chatId,
@@ -513,6 +538,10 @@ async function handleSetCheckinTime(
   const weeklySummaryScheduleId = await scheduleWeeklySummary(
     chatId,
     weeklyCron,
+  );
+  const overdueReviewScheduleId = await scheduleOverdueReview(
+    chatId,
+    overdueReviewCron,
   );
 
   // Save preferences with all schedule IDs
@@ -524,6 +553,7 @@ async function handleSetCheckinTime(
   );
   prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
   prefs.dailySummaryScheduleId = dailySummaryScheduleId;
+  prefs.overdueReviewScheduleId = overdueReviewScheduleId;
   await redis.saveUserPreferences(prefs);
 
   // Format time for display
@@ -544,11 +574,14 @@ async function setupDefaultSchedules(chatId: number): Promise<void> {
   // Default check-in time: 8 PM (20:00)
   const defaultHour = 20;
   const defaultMinute = 0;
+  // Overdue review at 9 PM (21:00)
+  const overdueReviewHour = 21;
 
   try {
     // Create cron expressions
     const cronExpression = `${defaultMinute} ${defaultHour} * * *`;
     const weeklyCron = `${defaultMinute} ${defaultHour} * * 0`; // Sundays
+    const overdueReviewCron = `${defaultMinute} ${overdueReviewHour} * * *`;
 
     // Schedule all recurring notifications
     const checkinScheduleId = await scheduleDailyCheckin(
@@ -563,6 +596,10 @@ async function setupDefaultSchedules(chatId: number): Promise<void> {
       chatId,
       weeklyCron,
     );
+    const overdueReviewScheduleId = await scheduleOverdueReview(
+      chatId,
+      overdueReviewCron,
+    );
 
     // Save preferences
     const prefs = await redis.setCheckinTime(
@@ -573,6 +610,7 @@ async function setupDefaultSchedules(chatId: number): Promise<void> {
     );
     prefs.dailySummaryScheduleId = dailySummaryScheduleId;
     prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
+    prefs.overdueReviewScheduleId = overdueReviewScheduleId;
     await redis.saveUserPreferences(prefs);
 
     console.log(`Set up default schedules for new user ${chatId}`);

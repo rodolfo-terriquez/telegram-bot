@@ -16,6 +16,7 @@ import {
   generateFollowUpMessage,
   generateReminderMessage,
   generateFinalNagMessage,
+  generateOverdueTasksReview,
 } from "../lib/llm.js";
 
 export default async function handler(
@@ -67,6 +68,10 @@ export default async function handler(
 
       case "follow_up":
         await handleFollowUp(payload);
+        break;
+
+      case "overdue_review":
+        await handleOverdueReview(payload);
         break;
 
       default:
@@ -237,4 +242,50 @@ async function handleFollowUp(payload: NotificationPayload): Promise<void> {
 
   // Clear the pending follow-up (we only send one follow-up per reminder)
   await redis.clearPendingFollowUp(chatId);
+}
+
+async function handleOverdueReview(
+  payload: NotificationPayload,
+): Promise<void> {
+  const { chatId } = payload;
+
+  // Get all pending tasks
+  const tasks = await redis.getPendingTasks(chatId);
+
+  // Filter to only overdue tasks (nextReminder is in the past)
+  const now = Date.now();
+  const overdueTasks = tasks.filter((t) => t.nextReminder < now);
+
+  // Only send if there are overdue tasks
+  if (overdueTasks.length === 0) {
+    return;
+  }
+
+  // Format overdue information for each task
+  const overdueTasksWithTime = overdueTasks.map((t) => {
+    const elapsed = now - t.nextReminder;
+    const minutes = Math.floor(elapsed / 60000);
+
+    let overdueBy: string;
+    if (minutes < 60) {
+      overdueBy = `${minutes} minute${minutes === 1 ? "" : "s"}`;
+    } else {
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) {
+        overdueBy = `${hours} hour${hours === 1 ? "" : "s"}`;
+      } else {
+        const days = Math.floor(hours / 24);
+        overdueBy = `${days} day${days === 1 ? "" : "s"}`;
+      }
+    }
+
+    return {
+      content: t.content,
+      overdueBy,
+    };
+  });
+
+  // Generate and send the review message
+  const reviewMessage = await generateOverdueTasksReview(overdueTasksWithTime);
+  await telegram.sendMessage(chatId, reviewMessage);
 }
