@@ -107,6 +107,13 @@ export default async function handler(
       return;
     }
 
+    // Handle /debug command
+    if (userText.trim().toLowerCase() === "/debug") {
+      await handleDebugCommand(chatId);
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // Cancel any pending follow-up since user has responded
     const pendingFollowUp = await redis.clearPendingFollowUp(chatId);
     if (pendingFollowUp?.qstashMessageId) {
@@ -626,6 +633,74 @@ async function handleSetCheckinTime(
   );
   await telegram.sendMessage(chatId, response);
   return response;
+}
+
+async function handleDebugCommand(chatId: number): Promise<void> {
+  const conversationData = await redis.getConversationData(chatId);
+  const { messages, summary, summaryUpdatedAt } = conversationData;
+
+  // Build the markdown document
+  const now = new Date();
+  const lines: string[] = [
+    "# Context Stack Debug",
+    "",
+    `**Generated:** ${now.toISOString()}`,
+    `**Chat ID:** ${chatId}`,
+    "",
+    "---",
+    "",
+  ];
+
+  // Summary section
+  lines.push("## Summary");
+  lines.push("");
+  if (summary) {
+    if (summaryUpdatedAt) {
+      const summaryDate = new Date(summaryUpdatedAt);
+      lines.push(`*Last updated: ${summaryDate.toISOString()}*`);
+      lines.push("");
+    }
+    lines.push(summary);
+  } else {
+    lines.push("*No summary yet - conversation has not been summarized.*");
+  }
+  lines.push("");
+  lines.push("---");
+  lines.push("");
+
+  // Recent messages section
+  lines.push("## Recent Messages");
+  lines.push("");
+  lines.push(
+    `**Total messages:** ${messages.length} (${Math.floor(messages.length / 2)} pairs)`,
+  );
+  lines.push("");
+
+  if (messages.length === 0) {
+    lines.push("*No messages in conversation history.*");
+  } else {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      const timestamp = new Date(msg.timestamp).toISOString();
+      const roleLabel = msg.role === "user" ? "**User**" : "**Assistant**";
+
+      lines.push(`### ${i + 1}. ${roleLabel}`);
+      lines.push(`*${timestamp}*`);
+      lines.push("");
+      lines.push(msg.content);
+      lines.push("");
+    }
+  }
+
+  const markdown = lines.join("\n");
+  const filename = `context-stack-${now.toISOString().replace(/[:.]/g, "-")}.md`;
+
+  await telegram.sendDocument(
+    chatId,
+    markdown,
+    filename,
+    "Context stack debug file",
+  );
 }
 
 async function setupDefaultSchedules(chatId: number): Promise<void> {

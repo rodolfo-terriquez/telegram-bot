@@ -10,10 +10,7 @@ function getToken(): string {
   return token;
 }
 
-export async function sendMessage(
-  chatId: number,
-  text: string
-): Promise<void> {
+export async function sendMessage(chatId: number, text: string): Promise<void> {
   const token = getToken();
   const response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
     method: "POST",
@@ -79,3 +76,33 @@ export async function setWebhook(webhookUrl: string): Promise<void> {
   }
 }
 
+export async function sendDocument(
+  chatId: number,
+  content: string,
+  filename: string,
+  caption?: string,
+): Promise<void> {
+  const token = getToken();
+
+  // Create form data with the file
+  const formData = new FormData();
+  formData.append("chat_id", chatId.toString());
+  formData.append(
+    "document",
+    new Blob([content], { type: "text/markdown" }),
+    filename,
+  );
+  if (caption) {
+    formData.append("caption", caption);
+  }
+
+  const response = await fetch(`${TELEGRAM_API}${token}/sendDocument`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Failed to send document: ${error}`);
+  }
+}
