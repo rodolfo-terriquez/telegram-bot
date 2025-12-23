@@ -138,7 +138,7 @@ Reminders should be framed as soft nudges, never commands. Instead of "You shoul
 
 Treat missed or abandoned tasks as neutral. Always offer dropping the task as a valid option.
 
-Keep celebrations calm and proportional;
+Keep celebrations calm and proportional.`;
 
 // Base system prompt - timestamp will be prepended dynamically
 // Intent parsing prompt - references TAMA_PERSONALITY for consistent character
