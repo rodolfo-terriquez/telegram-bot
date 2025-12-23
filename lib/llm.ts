@@ -278,6 +278,66 @@ ${conversationSummary}
   }
 }
 
+export async function generateReminderMessage(
+  taskContent: string,
+): Promise<string> {
+  const client = getClient();
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 100,
+    messages: [
+      {
+        role: "system",
+        content: `${TAMA_PERSONALITY}
+
+Generate the initial reminder notification for a task. This is the first time you're nudging the user about this task at the time they requested. Keep it to 1-2 short sentences. Frame it as a soft nudge, not a command. Let them know they can reply "done" when finished, but phrase it gently. Examples of tone: "Just a soft reminder about...", "This came up - ...", "Passing this along: ..."`,
+      },
+      {
+        role: "user",
+        content: `Send a reminder about: "${taskContent}"`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    return `Just a soft reminder about: ${taskContent}`;
+  }
+
+  return content;
+}
+
+export async function generateFinalNagMessage(
+  taskContent: string,
+): Promise<string> {
+  const client = getClient();
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 100,
+    messages: [
+      {
+        role: "system",
+        content: `${TAMA_PERSONALITY}
+
+Generate the final reminder message for a task. This is the last nudge - after this, you won't remind them again about this task. Keep it warm and pressure-free. Let them know it's okay and the task is still in their list whenever they're ready. Keep it to 1-2 short sentences.`,
+      },
+      {
+        role: "user",
+        content: `Send the final reminder about: "${taskContent}"`,
+      },
+    ],
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    return `Last gentle nudge about ${taskContent}. It's still in your list whenever you're ready.`;
+  }
+
+  return content;
+}
+
 export async function generateFollowUpMessage(
   taskContent: string,
 ): Promise<string> {

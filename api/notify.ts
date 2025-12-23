@@ -14,6 +14,8 @@ import {
   generateCheckinPrompt,
   generateWeeklyInsights,
   generateFollowUpMessage,
+  generateReminderMessage,
+  generateFinalNagMessage,
 } from "../lib/llm.js";
 
 export default async function handler(
@@ -88,11 +90,9 @@ async function handleReminder(payload: NotificationPayload): Promise<void> {
     return;
   }
 
-  // Send the reminder
-  await telegram.sendMessage(
-    chatId,
-    `⏰ *Reminder:* ${task.content}\n\nReply "done" when you've finished!`,
-  );
+  // Generate and send the reminder using the LLM for personality-consistent messaging
+  const reminderMessage = await generateReminderMessage(task.content);
+  await telegram.sendMessage(chatId, reminderMessage);
 
   // Schedule a follow-up in 5-10 minutes in case user doesn't respond
   try {
@@ -148,10 +148,8 @@ async function handleNag(payload: NotificationPayload): Promise<void> {
     await redis.updateTask(task);
   } else {
     // Final nag - stop nagging but keep task pending
-    await telegram.sendMessage(
-      chatId,
-      `This was my last reminder about *${task.content}*. It's still in your task list whenever you're ready. No pressure! 💪`,
-    );
+    const finalMessage = await generateFinalNagMessage(task.content);
+    await telegram.sendMessage(chatId, finalMessage);
   }
 }
 
