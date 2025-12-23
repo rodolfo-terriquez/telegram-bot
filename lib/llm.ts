@@ -95,17 +95,18 @@ ${context.summary}
   ];
 
   // Add recent conversation history if available
+  // Format as JSON to clearly separate metadata from content
   if (context?.messages && context.messages.length > 0) {
     for (const msg of context.messages) {
-      const timeStr = formatTimestamp(msg.timestamp);
-      if (msg.role === "user") {
-        messages.push({ role: "user", content: `[${timeStr}] ${msg.content}` });
-      } else {
-        messages.push({
-          role: "assistant",
-          content: `[${timeStr}] ${msg.content}`,
-        });
-      }
+      const contextEntry = {
+        timestamp: formatTimestamp(msg.timestamp),
+        role: msg.role,
+        content: msg.content,
+      };
+      messages.push({
+        role: msg.role,
+        content: JSON.stringify(contextEntry),
+      });
     }
   }
 
@@ -132,7 +133,8 @@ Communication style:
 - Avoid absolutes ("must," "always," "never")
 - Avoid exclamation points except for small, quiet celebrations
 - Emoji use is minimal (some suggestions: 🐾 ☕ 🌱)
-- NEVER start your messages with timestamps or dates - the timestamps in conversation history are for your context only, not part of the actual message format
+
+Conversation history is provided as JSON objects with metadata fields (timestamp, role, content). Your responses should contain ONLY the message content - never include JSON formatting or metadata fields like timestamps in your actual responses.
 
 Reminders should be framed as soft nudges, never commands. Instead of "You should..." or "Don't forget...", say things like "Just a soft reminder..." or "This came up again, in case now's better."
 
@@ -303,29 +305,33 @@ ${conversationSummary}
     });
   }
 
-  // Add conversation history with context markers and timestamps
+  // Add conversation history formatted as JSON to clearly separate metadata from content
   for (const msg of conversationHistory) {
-    const timeStr = formatTimestamp(msg.timestamp);
-    if (msg.role === "user") {
-      messages.push({ role: "user", content: `[${timeStr}] ${msg.content}` });
-    } else {
-      // Wrap assistant messages to indicate they were user-facing responses
-      messages.push({
-        role: "assistant",
-        content: `[${timeStr}] [I responded to the user with: "${msg.content}"]`,
-      });
-    }
+    const contextEntry = {
+      timestamp: formatTimestamp(msg.timestamp),
+      role: msg.role,
+      content: msg.content,
+    };
+    messages.push({
+      role: msg.role,
+      content: JSON.stringify(contextEntry),
+    });
   }
 
-  // Build the current message with context and timestamp
+  // Build the current message as JSON with context
   const currentTime = formatTimestamp(Date.now());
-  let contextualMessage = `[${currentTime}] ${userMessage}`;
+  const currentEntry: Record<string, string> = {
+    timestamp: currentTime,
+    role: "user",
+    content: userMessage,
+  };
   if (isAwaitingCheckin) {
-    contextualMessage = `[CONTEXT: The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.]\n\n[${currentTime}] ${userMessage}`;
+    currentEntry.context =
+      "The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.";
   }
 
   // Add current message
-  messages.push({ role: "user", content: contextualMessage });
+  messages.push({ role: "user", content: JSON.stringify(currentEntry) });
 
   const response = await client.chat.completions.create({
     model: getModel(),
