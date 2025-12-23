@@ -287,13 +287,38 @@ export async function findListByDescription(
     return lists[0];
   }
 
-  // Try to find a matching list (fuzzy match on name)
-  const normalizedDesc = description.toLowerCase();
-  const matchedList = lists.find(
+  const normalizedDesc = description.toLowerCase().trim();
+
+  // Try exact substring match first
+  let matchedList = lists.find(
     (l) =>
       l.name.toLowerCase().includes(normalizedDesc) ||
       normalizedDesc.includes(l.name.toLowerCase()),
   );
+
+  if (matchedList) return matchedList;
+
+  // Try word-based matching - check if any significant word from the description
+  // appears in the list name
+  const descWords = normalizedDesc.split(/\s+/).filter((w) => w.length > 2); // Skip short words like "my", "the", "a"
+
+  matchedList = lists.find((l) => {
+    const listNameLower = l.name.toLowerCase();
+    return descWords.some((word) => listNameLower.includes(word));
+  });
+
+  if (matchedList) return matchedList;
+
+  // Try matching against list items as a last resort
+  matchedList = lists.find((l) => {
+    return l.items.some((item) => {
+      const itemLower = item.content.toLowerCase();
+      return (
+        itemLower.includes(normalizedDesc) ||
+        descWords.some((word) => itemLower.includes(word))
+      );
+    });
+  });
 
   return matchedList || null;
 }
