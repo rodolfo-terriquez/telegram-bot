@@ -67,6 +67,54 @@ function getCurrentTimeContext(): string {
   return `CURRENT TIME: ${formatted} (User timezone: ${timezone})\n\n`;
 }
 
+// Conversation context type for passing to generation functions
+export interface ConversationContext {
+  messages: ConversationMessage[];
+  summary?: string;
+}
+
+// Helper to build context-aware messages for LLM calls
+function buildContextMessages(
+  systemPrompt: string,
+  taskPrompt: string,
+  context?: ConversationContext,
+): ChatCompletionMessageParam[] {
+  let fullSystemPrompt = getCurrentTimeContext() + systemPrompt;
+
+  // Add conversation summary if available
+  if (context?.summary) {
+    fullSystemPrompt += `\n\n---CONVERSATION CONTEXT---
+The following is a summary of your recent conversation with this user. Use this to inform your tone and any references to previous discussions:
+
+${context.summary}
+---END CONTEXT---`;
+  }
+
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: fullSystemPrompt },
+  ];
+
+  // Add recent conversation history if available
+  if (context?.messages && context.messages.length > 0) {
+    for (const msg of context.messages) {
+      const timeStr = formatTimestamp(msg.timestamp);
+      if (msg.role === "user") {
+        messages.push({ role: "user", content: `[${timeStr}] ${msg.content}` });
+      } else {
+        messages.push({
+          role: "assistant",
+          content: `[${timeStr}] ${msg.content}`,
+        });
+      }
+    }
+  }
+
+  // Add the task-specific prompt
+  messages.push({ role: "user", content: taskPrompt });
+
+  return messages;
+}
+
 // Tama personality prompt - used across all LLM interactions
 const TAMA_PERSONALITY = `You are Tama, a cozy cat-girl companion designed to support a user with ADHD.
 
@@ -280,24 +328,20 @@ ${conversationSummary}
 
 export async function generateReminderMessage(
   taskContent: string,
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate the initial reminder notification for a task. This is the first time you're nudging the user about this task at the time they requested. Keep it to 1-2 short sentences. Frame it as a soft nudge, not a command. Let them know they can reply "done" when finished, but phrase it gently. Examples of tone: "Just a soft reminder about...", "This came up - ...", "Passing this along: ..."`;
+
+  const taskPrompt = `Send a reminder about: "${taskContent}"`;
 
   const response = await client.chat.completions.create({
     model: getModel(),
     max_tokens: 100,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
-
-Generate the initial reminder notification for a task. This is the first time you're nudging the user about this task at the time they requested. Keep it to 1-2 short sentences. Frame it as a soft nudge, not a command. Let them know they can reply "done" when finished, but phrase it gently. Examples of tone: "Just a soft reminder about...", "This came up - ...", "Passing this along: ..."`,
-      },
-      {
-        role: "user",
-        content: `Send a reminder about: "${taskContent}"`,
-      },
-    ],
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -310,24 +354,20 @@ Generate the initial reminder notification for a task. This is the first time yo
 
 export async function generateFinalNagMessage(
   taskContent: string,
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate the final reminder message for a task. This is the last nudge - after this, you won't remind them again about this task. Keep it warm and pressure-free. Let them know it's okay and the task is still in their list whenever they're ready. Keep it to 1-2 short sentences.`;
+
+  const taskPrompt = `Send the final reminder about: "${taskContent}"`;
 
   const response = await client.chat.completions.create({
     model: getModel(),
     max_tokens: 100,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
-
-Generate the final reminder message for a task. This is the last nudge - after this, you won't remind them again about this task. Keep it warm and pressure-free. Let them know it's okay and the task is still in their list whenever they're ready. Keep it to 1-2 short sentences.`,
-      },
-      {
-        role: "user",
-        content: `Send the final reminder about: "${taskContent}"`,
-      },
-    ],
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -340,24 +380,20 @@ Generate the final reminder message for a task. This is the last nudge - after t
 
 export async function generateFollowUpMessage(
   taskContent: string,
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate a very brief follow-up to a reminder you sent a few minutes ago. The user hasn't responded yet, so this is just a gentle "hey, still here" nudge. Keep it to one short sentence. Don't repeat the task details - just a soft check-in. Examples of tone: "Just making sure this reached you.", "Still here if you need me.", "Bumping this up in case it got buried."`;
+
+  const taskPrompt = `I sent a reminder about "${taskContent}" a few minutes ago but haven't heard back. Generate a brief follow-up.`;
 
   const response = await client.chat.completions.create({
     model: getModel(),
     max_tokens: 100,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
-
-Generate a very brief follow-up to a reminder you sent a few minutes ago. The user hasn't responded yet, so this is just a gentle "hey, still here" nudge. Keep it to one short sentence. Don't repeat the task details - just a soft check-in. Examples of tone: "Just making sure this reached you.", "Still here if you need me.", "Bumping this up in case it got buried."`,
-      },
-      {
-        role: "user",
-        content: `I sent a reminder about "${taskContent}" a few minutes ago but haven't heard back. Generate a brief follow-up.`,
-      },
-    ],
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -370,6 +406,7 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
 
 export async function generateOverdueTasksReview(
   overdueTasks: { content: string; overdueBy: string }[],
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
 
@@ -377,21 +414,16 @@ export async function generateOverdueTasksReview(
     .map((t) => `- "${t.content}" (overdue by ${t.overdueBy})`)
     .join("\n");
 
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate an end-of-day review message for overdue tasks. The user has tasks that were due earlier but haven't been completed or acknowledged. Present them gently and offer options: they can mark tasks done, reschedule them for tomorrow, or drop them entirely. Frame dropping tasks as a valid and healthy option. Keep it warm but concise. Don't use numbered lists - just present the tasks naturally.`;
+
+  const taskPrompt = `Here are the overdue tasks to review:\n${taskList}\n\nGenerate a gentle end-of-day review message.`;
+
   const response = await client.chat.completions.create({
     model: getModel(),
     max_tokens: 300,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
-
-Generate an end-of-day review message for overdue tasks. The user has tasks that were due earlier but haven't been completed or acknowledged. Present them gently and offer options: they can mark tasks done, reschedule them for tomorrow, or drop them entirely. Frame dropping tasks as a valid and healthy option. Keep it warm but concise. Don't use numbered lists - just present the tasks naturally.`,
-      },
-      {
-        role: "user",
-        content: `Here are the overdue tasks to review:\n${taskList}\n\nGenerate a gentle end-of-day review message.`,
-      },
-    ],
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -405,6 +437,7 @@ Generate an end-of-day review message for overdue tasks. The user has tasks that
 export async function generateNaggingMessage(
   task: Task,
   naggingLevel: number,
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
 
@@ -419,23 +452,18 @@ export async function generateNaggingMessage(
 
   const style = reminderStyles[Math.min(naggingLevel, 4)] || reminderStyles[4];
 
-  const response = await client.chat.completions.create({
-    model: getModel(),
-    max_tokens: 150,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
+  const systemPrompt = `${TAMA_PERSONALITY}
 
 Generate a soft reminder message for a task. ${style}
 
-Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." - instead use phrases like "Just a soft reminder..." or "This came up again, in case now's better." Never shame or pressure.`,
-      },
-      {
-        role: "user",
-        content: `Remind me about: ${task.content}`,
-      },
-    ],
+Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." - instead use phrases like "Just a soft reminder..." or "This came up again, in case now's better." Never shame or pressure.`;
+
+  const taskPrompt = `Remind me about: ${task.content}`;
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 150,
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -449,6 +477,7 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
 export async function generateDailySummary(
   dumps: BrainDump[],
   pendingTasks: Task[],
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
 
@@ -462,19 +491,11 @@ export async function generateDailySummary(
       ? pendingTasks.map((t) => `- ${t.content}`).join("\n")
       : "No pending tasks.";
 
-  const response = await client.chat.completions.create({
-    model: getModel(),
-    max_tokens: 500,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
+  const systemPrompt = `${TAMA_PERSONALITY}
 
-Create a calm, organized daily summary. Help the user see any patterns or connections in their thoughts without being preachy. If there are pending tasks, present them neutrally - no guilt. Keep it concise and warm. No productivity judgment.`,
-      },
-      {
-        role: "user",
-        content: `Here's my daily summary:
+Create a calm, organized daily summary. Help the user see any patterns or connections in their thoughts without being preachy. If there are pending tasks, present them neutrally - no guilt. Keep it concise and warm. No productivity judgment.`;
+
+  const taskPrompt = `Here's my daily summary:
 
 Brain dumps captured today:
 ${dumpsText}
@@ -482,9 +503,12 @@ ${dumpsText}
 Pending tasks/reminders:
 ${tasksText}
 
-Please summarize this in a gentle, supportive way.`,
-      },
-    ],
+Please summarize this in a gentle, supportive way.`;
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 500,
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -509,24 +533,21 @@ export function calculateNextNagDelay(
   return Math.round(delay * multiplier);
 }
 
-export async function generateCheckinPrompt(): Promise<string> {
+export async function generateCheckinPrompt(
+  context?: ConversationContext,
+): Promise<string> {
   const client = getClient();
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate a soft daily check-in. Ask the user to rate how their day felt on a scale of 1-5, with optional notes. Keep it to 1-2 sentences, warm and low-pressure. No exclamation points. Vary your wording to keep it fresh. Frame it as curiosity, not obligation.`;
+
+  const taskPrompt = "Generate a daily check-in prompt.";
 
   const response = await client.chat.completions.create({
     model: getModel(),
     max_tokens: 150,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
-
-Generate a soft daily check-in. Ask the user to rate how their day felt on a scale of 1-5, with optional notes. Keep it to 1-2 sentences, warm and low-pressure. No exclamation points. Vary your wording to keep it fresh. Frame it as curiosity, not obligation.`,
-      },
-      {
-        role: "user",
-        content: "Generate a daily check-in prompt.",
-      },
-    ],
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -541,6 +562,7 @@ export async function generateWeeklyInsights(
   checkIns: CheckIn[],
   dumps: BrainDump[],
   completedTaskCount: number,
+  context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
 
@@ -569,19 +591,11 @@ export async function generateWeeklyInsights(
       ? dumps.map((d) => `- ${d.content}`).join("\n")
       : "No brain dumps this week.";
 
-  const response = await client.chat.completions.create({
-    model: getModel(),
-    max_tokens: 600,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
+  const systemPrompt = `${TAMA_PERSONALITY}
 
-Create a gentle weekly reflection. Notice patterns (which days felt better/harder, any themes) without judgment. If you offer suggestions, frame them as options, not directives - "maybe," "you could try," "if it helps." Never imply the user should have done more. Treat all outcomes as neutral data. Keep it warm and concise.`,
-      },
-      {
-        role: "user",
-        content: `Here's my week:
+Create a gentle weekly reflection. Notice patterns (which days felt better/harder, any themes) without judgment. If you offer suggestions, frame them as options, not directives - "maybe," "you could try," "if it helps." Never imply the user should have done more. Treat all outcomes as neutral data. Keep it warm and concise.`;
+
+  const taskPrompt = `Here's my week:
 
 Daily check-ins (1-5 rating):
 ${checkInsText}
@@ -592,9 +606,12 @@ Brain dumps captured: ${dumps.length}
 
 ${dumps.length > 0 ? `Brain dump topics:\n${dumpsText}` : ""}
 
-Please share any patterns you notice, gently.`,
-      },
-    ],
+Please share any patterns you notice, gently.`;
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 600,
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -631,40 +648,41 @@ export type ActionContext =
   | { type: "checkin_time_set"; timeStr: string };
 
 export async function generateActionResponse(
-  context: ActionContext,
+  actionContext: ActionContext,
+  conversationContext?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
 
   let prompt: string;
 
-  switch (context.type) {
+  switch (actionContext.type) {
     case "reminder_created":
-      prompt = `The user just set a reminder for "${context.task}" in ${context.timeStr}.${context.isImportant ? " They marked it as important, so I'll nag them until it's done." : ""} Acknowledge this warmly and briefly.`;
+      prompt = `The user just set a reminder for "${actionContext.task}" in ${actionContext.timeStr}.${actionContext.isImportant ? " They marked it as important, so I'll nag them until it's done." : ""} Acknowledge this warmly and briefly.`;
       break;
     case "multiple_reminders_created":
-      const reminderList = context.reminders
+      const reminderList = actionContext.reminders
         .map(
           (r) =>
             `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`,
         )
         .join("\n");
-      prompt = `The user just created ${context.reminders.length} reminders:\n${reminderList}\nAcknowledge this briefly - confirm they're set.`;
+      prompt = `The user just created ${actionContext.reminders.length} reminders:\n${reminderList}\nAcknowledge this briefly - confirm they're set.`;
       break;
     case "brain_dump_saved":
-      prompt = `The user just captured a thought/brain dump: "${context.content}". Acknowledge that it's been saved and they'll see it in their daily summary. Keep it very brief.`;
+      prompt = `The user just captured a thought/brain dump: "${actionContext.content}". Acknowledge that it's been saved and they'll see it in their daily summary. Keep it very brief.`;
       break;
     case "task_completed":
-      prompt = `The user just marked "${context.task}" as done. Give them a calm, proportional acknowledgment. Remember: "Nice. That counts." style, not over-the-top celebration.`;
+      prompt = `The user just marked "${actionContext.task}" as done. Give them a calm, proportional acknowledgment. Remember: "Nice. That counts." style, not over-the-top celebration.`;
       break;
     case "task_cancelled":
-      prompt = `The user just cancelled the task "${context.task}". Acknowledge neutrally - it's okay to change priorities or drop things.`;
+      prompt = `The user just cancelled the task "${actionContext.task}". Acknowledge neutrally - it's okay to change priorities or drop things.`;
       break;
     case "multiple_tasks_cancelled":
-      const taskList = context.tasks.map((t) => `- "${t}"`).join("\n");
-      prompt = `The user just cancelled ${context.tasks.length} tasks:\n${taskList}\nAcknowledge neutrally - it's okay to change priorities.`;
+      const taskList = actionContext.tasks.map((t) => `- "${t}"`).join("\n");
+      prompt = `The user just cancelled ${actionContext.tasks.length} tasks:\n${taskList}\nAcknowledge neutrally - it's okay to change priorities.`;
       break;
     case "task_list":
-      const formattedTasks = context.tasks
+      const formattedTasks = actionContext.tasks
         .map(
           (t, i) =>
             `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
@@ -676,51 +694,44 @@ export async function generateActionResponse(
       prompt = `The user has no pending tasks or reminders. Let them know in a warm, brief way - they have a clear plate.`;
       break;
     case "task_not_found":
-      prompt = `The user tried to mark a task as ${context.action === "done" ? "done" : "cancelled"}, but I couldn't find a matching pending task. Gently let them know and suggest they can say "list tasks" to see what's pending.`;
+      prompt = `The user tried to mark a task as ${actionContext.action === "done" ? "done" : "cancelled"}, but I couldn't find a matching pending task. Gently let them know and suggest they can say "list tasks" to see what's pending.`;
       break;
     case "checkin_logged":
-      prompt = `The user just completed their daily check-in with a rating of ${context.rating}/5.${context.hasNotes ? " They also included some notes." : ""} Acknowledge briefly - no big fanfare, just a warm receipt.`;
+      prompt = `The user just completed their daily check-in with a rating of ${actionContext.rating}/5.${actionContext.hasNotes ? " They also included some notes." : ""} Acknowledge briefly - no big fanfare, just a warm receipt.`;
       break;
     case "checkin_time_set":
-      prompt = `The user just set their daily check-in time to ${context.timeStr}. They'll also get a daily summary and weekly summary on Sundays at this time. Confirm this briefly.`;
+      prompt = `The user just set their daily check-in time to ${actionContext.timeStr}. They'll also get a daily summary and weekly summary on Sundays at this time. Confirm this briefly.`;
       break;
   }
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be warm but brief. For task lists, you may format with bullet points or numbers.`;
 
   const response = await client.chat.completions.create({
     model: getModel(),
     max_tokens: 200,
-    messages: [
-      {
-        role: "system",
-        content: `${TAMA_PERSONALITY}
-
-Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be warm but brief. For task lists, you may format with bullet points or numbers.`,
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
+    messages: buildContextMessages(systemPrompt, prompt, conversationContext),
   });
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
     // Fallbacks for each type
-    switch (context.type) {
+    switch (actionContext.type) {
       case "reminder_created":
-        return `Got it, I'll remind you about ${context.task} in ${context.timeStr}.`;
+        return `Got it, I'll remind you about ${actionContext.task} in ${actionContext.timeStr}.`;
       case "multiple_reminders_created":
-        return `Set ${context.reminders.length} reminders for you.`;
+        return `Set ${actionContext.reminders.length} reminders for you.`;
       case "brain_dump_saved":
         return `Captured that thought.`;
       case "task_completed":
-        return `Marked ${context.task} as done.`;
+        return `Marked ${actionContext.task} as done.`;
       case "task_cancelled":
-        return `Cancelled ${context.task}.`;
+        return `Cancelled ${actionContext.task}.`;
       case "multiple_tasks_cancelled":
-        return `Cancelled ${context.tasks.length} tasks.`;
+        return `Cancelled ${actionContext.tasks.length} tasks.`;
       case "task_list":
-        return context.tasks
+        return actionContext.tasks
           .map((t, i) => `${i + 1}. ${t.content} - ${t.timeStr}`)
           .join("\n");
       case "no_tasks":
@@ -728,9 +739,9 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
       case "task_not_found":
         return `Couldn't find a matching task. Say "list tasks" to see what's pending.`;
       case "checkin_logged":
-        return `Logged your check-in: ${context.rating}/5.`;
+        return `Logged your check-in: ${actionContext.rating}/5.`;
       case "checkin_time_set":
-        return `Check-in time set to ${context.timeStr}.`;
+        return `Check-in time set to ${actionContext.timeStr}.`;
     }
   }
 

@@ -6,6 +6,7 @@ import {
   parseIntent,
   generateConversationSummary,
   generateActionResponse,
+  ConversationContext,
 } from "../lib/llm.js";
 import * as redis from "../lib/redis.js";
 import {
@@ -126,8 +127,14 @@ export default async function handler(
       conversationData.summary,
     );
 
+    // Build conversation context for response generation
+    const context: ConversationContext = {
+      messages: conversationData.messages,
+      summary: conversationData.summary,
+    };
+
     // Handle the intent
-    const response = await handleIntent(chatId, intent);
+    const response = await handleIntent(chatId, intent, context);
 
     // Save to conversation history
     if (response) {
@@ -144,38 +151,39 @@ export default async function handler(
 async function handleIntent(
   chatId: number,
   intent: Intent,
+  context: ConversationContext,
 ): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
-      return await handleReminder(chatId, intent);
+      return await handleReminder(chatId, intent, context);
 
     case "multiple_reminders":
-      return await handleMultipleReminders(chatId, intent);
+      return await handleMultipleReminders(chatId, intent, context);
 
     case "brain_dump":
-      return await handleBrainDump(chatId, intent);
+      return await handleBrainDump(chatId, intent, context);
 
     case "mark_done":
-      return await handleMarkDone(chatId, intent);
+      return await handleMarkDone(chatId, intent, context);
 
     case "cancel_task":
-      return await handleCancelTask(chatId, intent);
+      return await handleCancelTask(chatId, intent, context);
 
     case "cancel_multiple_tasks":
-      return await handleCancelMultipleTasks(chatId, intent);
+      return await handleCancelMultipleTasks(chatId, intent, context);
 
     case "list_tasks":
-      return await handleListTasks(chatId);
+      return await handleListTasks(chatId, context);
 
     case "conversation":
       await telegram.sendMessage(chatId, intent.response);
       return intent.response;
 
     case "checkin_response":
-      return await handleCheckinResponse(chatId, intent);
+      return await handleCheckinResponse(chatId, intent, context);
 
     case "set_checkin_time":
-      return await handleSetCheckinTime(chatId, intent);
+      return await handleSetCheckinTime(chatId, intent, context);
   }
 }
 
@@ -187,6 +195,7 @@ async function handleReminder(
     delayMinutes: number;
     isImportant: boolean;
   },
+  context: ConversationContext,
 ): Promise<string> {
   // Create the task in Redis
   const task = await redis.createTask(
@@ -220,12 +229,15 @@ async function handleReminder(
   // Format time for user
   const timeStr = formatDelay(intent.delayMinutes);
 
-  const response = await generateActionResponse({
-    type: "reminder_created",
-    task: intent.task,
-    timeStr,
-    isImportant: intent.isImportant,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "reminder_created",
+      task: intent.task,
+      timeStr,
+      isImportant: intent.isImportant,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -233,6 +245,7 @@ async function handleReminder(
 async function handleMultipleReminders(
   chatId: number,
   intent: { type: "multiple_reminders"; reminders: ReminderItem[] },
+  context: ConversationContext,
 ): Promise<string> {
   const createdTasks: {
     task: string;
@@ -271,10 +284,13 @@ async function handleMultipleReminders(
     });
   }
 
-  const response = await generateActionResponse({
-    type: "multiple_reminders_created",
-    reminders: createdTasks,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "multiple_reminders_created",
+      reminders: createdTasks,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -282,13 +298,17 @@ async function handleMultipleReminders(
 async function handleBrainDump(
   chatId: number,
   intent: { type: "brain_dump"; content: string },
+  context: ConversationContext,
 ): Promise<string> {
   await redis.createBrainDump(chatId, intent.content);
 
-  const response = await generateActionResponse({
-    type: "brain_dump_saved",
-    content: intent.content,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "brain_dump_saved",
+      content: intent.content,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -296,6 +316,7 @@ async function handleBrainDump(
 async function handleMarkDone(
   chatId: number,
   intent: { type: "mark_done"; taskDescription?: string },
+  context: ConversationContext,
 ): Promise<string> {
   // Find the task
   const task = await redis.findTaskByDescription(
@@ -304,10 +325,13 @@ async function handleMarkDone(
   );
 
   if (!task) {
-    const response = await generateActionResponse({
-      type: "task_not_found",
-      action: "done",
-    });
+    const response = await generateActionResponse(
+      {
+        type: "task_not_found",
+        action: "done",
+      },
+      context,
+    );
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -320,10 +344,13 @@ async function handleMarkDone(
   // Complete the task
   await redis.completeTask(chatId, task.id);
 
-  const response = await generateActionResponse({
-    type: "task_completed",
-    task: task.content,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "task_completed",
+      task: task.content,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -331,6 +358,7 @@ async function handleMarkDone(
 async function handleCancelTask(
   chatId: number,
   intent: { type: "cancel_task"; taskDescription?: string },
+  context: ConversationContext,
 ): Promise<string> {
   // Find the task
   const task = await redis.findTaskByDescription(
@@ -339,10 +367,13 @@ async function handleCancelTask(
   );
 
   if (!task) {
-    const response = await generateActionResponse({
-      type: "task_not_found",
-      action: "cancel",
-    });
+    const response = await generateActionResponse(
+      {
+        type: "task_not_found",
+        action: "cancel",
+      },
+      context,
+    );
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -355,10 +386,13 @@ async function handleCancelTask(
   // Delete the task
   await redis.deleteTask(chatId, task.id);
 
-  const response = await generateActionResponse({
-    type: "task_cancelled",
-    task: task.content,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "task_cancelled",
+      task: task.content,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -366,6 +400,7 @@ async function handleCancelTask(
 async function handleCancelMultipleTasks(
   chatId: number,
   intent: { type: "cancel_multiple_tasks"; taskDescriptions: string[] },
+  context: ConversationContext,
 ): Promise<string> {
   const tasks = await redis.findTasksByDescriptions(
     chatId,
@@ -373,10 +408,13 @@ async function handleCancelMultipleTasks(
   );
 
   if (tasks.length === 0) {
-    const response = await generateActionResponse({
-      type: "task_not_found",
-      action: "cancel",
-    });
+    const response = await generateActionResponse(
+      {
+        type: "task_not_found",
+        action: "cancel",
+      },
+      context,
+    );
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -394,19 +432,28 @@ async function handleCancelMultipleTasks(
     cancelledTasks.push(task.content);
   }
 
-  const response = await generateActionResponse({
-    type: "multiple_tasks_cancelled",
-    tasks: cancelledTasks,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "multiple_tasks_cancelled",
+      tasks: cancelledTasks,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
 
-async function handleListTasks(chatId: number): Promise<string> {
+async function handleListTasks(
+  chatId: number,
+  context: ConversationContext,
+): Promise<string> {
   const tasks = await redis.getPendingTasks(chatId);
 
   if (tasks.length === 0) {
-    const response = await generateActionResponse({ type: "no_tasks" });
+    const response = await generateActionResponse(
+      { type: "no_tasks" },
+      context,
+    );
     await telegram.sendMessage(chatId, response);
     return response;
   }
@@ -417,10 +464,13 @@ async function handleListTasks(chatId: number): Promise<string> {
     isImportant: t.isImportant,
   }));
 
-  const response = await generateActionResponse({
-    type: "task_list",
-    tasks: taskList,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "task_list",
+      tasks: taskList,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -482,6 +532,7 @@ function formatFutureTime(timestamp: number): string {
 async function handleCheckinResponse(
   chatId: number,
   intent: { type: "checkin_response"; rating: number; notes?: string },
+  context: ConversationContext,
 ): Promise<string> {
   // Save the check-in
   await redis.saveCheckIn(chatId, intent.rating, intent.notes);
@@ -489,11 +540,14 @@ async function handleCheckinResponse(
   // Clear the awaiting state
   await redis.clearAwaitingCheckin(chatId);
 
-  const response = await generateActionResponse({
-    type: "checkin_logged",
-    rating: intent.rating,
-    hasNotes: !!intent.notes,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "checkin_logged",
+      rating: intent.rating,
+      hasNotes: !!intent.notes,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -501,6 +555,7 @@ async function handleCheckinResponse(
 async function handleSetCheckinTime(
   chatId: number,
   intent: { type: "set_checkin_time"; hour: number; minute: number },
+  context: ConversationContext,
 ): Promise<string> {
   const { hour, minute } = intent;
 
@@ -562,10 +617,13 @@ async function handleSetCheckinTime(
   const displayMinute = minute.toString().padStart(2, "0");
   const timeStr = `${displayHour}:${displayMinute} ${period}`;
 
-  const response = await generateActionResponse({
-    type: "checkin_time_set",
-    timeStr,
-  });
+  const response = await generateActionResponse(
+    {
+      type: "checkin_time_set",
+      timeStr,
+    },
+    context,
+  );
   await telegram.sendMessage(chatId, response);
   return response;
 }

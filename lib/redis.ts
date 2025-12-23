@@ -290,8 +290,8 @@ export async function getActiveChats(): Promise<number[]> {
 
 // Conversation memory
 const CONVERSATION_KEY = (chatId: number) => `conversation:${chatId}`;
-const MAX_CONVERSATION_PAIRS = 20; // Trigger summarization at 20 pairs
-const RECENT_PAIRS_TO_KEEP = 5; // Keep 5 most recent pairs verbatim after summarization
+const MAX_CONVERSATION_PAIRS = 30; // Trigger summarization at 30 pairs
+const RECENT_PAIRS_TO_KEEP = 10; // Keep 10 most recent pairs verbatim after summarization
 const CONVERSATION_TTL = 24 * 60 * 60; // 24 hours
 
 export interface ConversationMessage {

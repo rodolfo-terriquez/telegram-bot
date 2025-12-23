@@ -17,7 +17,17 @@ import {
   generateReminderMessage,
   generateFinalNagMessage,
   generateOverdueTasksReview,
+  ConversationContext,
 } from "../lib/llm.js";
+
+// Helper to get conversation context for a chat
+async function getContext(chatId: number): Promise<ConversationContext> {
+  const conversationData = await redis.getConversationData(chatId);
+  return {
+    messages: conversationData.messages,
+    summary: conversationData.summary,
+  };
+}
 
 export default async function handler(
   req: VercelRequest,
@@ -95,8 +105,11 @@ async function handleReminder(payload: NotificationPayload): Promise<void> {
     return;
   }
 
+  // Get conversation context for personality-consistent messaging
+  const context = await getContext(chatId);
+
   // Generate and send the reminder using the LLM for personality-consistent messaging
-  const reminderMessage = await generateReminderMessage(task.content);
+  const reminderMessage = await generateReminderMessage(task.content, context);
   await telegram.sendMessage(chatId, reminderMessage);
 
   // Schedule a follow-up in 5-10 minutes in case user doesn't respond
@@ -135,8 +148,15 @@ async function handleNag(payload: NotificationPayload): Promise<void> {
     return;
   }
 
+  // Get conversation context
+  const context = await getContext(chatId);
+
   // Generate a contextual nagging message
-  const nagMessage = await generateNaggingMessage(task, task.naggingLevel);
+  const nagMessage = await generateNaggingMessage(
+    task,
+    task.naggingLevel,
+    context,
+  );
 
   await telegram.sendMessage(chatId, nagMessage);
 
@@ -153,7 +173,7 @@ async function handleNag(payload: NotificationPayload): Promise<void> {
     await redis.updateTask(task);
   } else {
     // Final nag - stop nagging but keep task pending
-    const finalMessage = await generateFinalNagMessage(task.content);
+    const finalMessage = await generateFinalNagMessage(task.content, context);
     await telegram.sendMessage(chatId, finalMessage);
   }
 }
@@ -172,8 +192,11 @@ async function handleDailySummary(payload: NotificationPayload): Promise<void> {
     return;
   }
 
+  // Get conversation context
+  const context = await getContext(chatId);
+
   // Generate AI summary
-  const summary = await generateDailySummary(dumps, tasks);
+  const summary = await generateDailySummary(dumps, tasks, context);
 
   await telegram.sendMessage(chatId, summary);
 }
@@ -181,8 +204,11 @@ async function handleDailySummary(payload: NotificationPayload): Promise<void> {
 async function handleDailyCheckin(payload: NotificationPayload): Promise<void> {
   const { chatId } = payload;
 
+  // Get conversation context
+  const context = await getContext(chatId);
+
   // Generate a friendly check-in prompt
-  const prompt = await generateCheckinPrompt();
+  const prompt = await generateCheckinPrompt(context);
 
   await telegram.sendMessage(chatId, prompt);
 
@@ -207,11 +233,15 @@ async function handleWeeklySummary(
     return;
   }
 
+  // Get conversation context
+  const context = await getContext(chatId);
+
   // Generate weekly insights
   const insights = await generateWeeklyInsights(
     checkIns,
     dumps,
     completedTaskCount,
+    context,
   );
 
   await telegram.sendMessage(chatId, insights);
@@ -236,8 +266,11 @@ async function handleFollowUp(payload: NotificationPayload): Promise<void> {
     return;
   }
 
+  // Get conversation context
+  const context = await getContext(chatId);
+
   // Generate and send a gentle follow-up message
-  const followUpMessage = await generateFollowUpMessage(task.content);
+  const followUpMessage = await generateFollowUpMessage(task.content, context);
   await telegram.sendMessage(chatId, followUpMessage);
 
   // Clear the pending follow-up (we only send one follow-up per reminder)
@@ -285,7 +318,13 @@ async function handleOverdueReview(
     };
   });
 
+  // Get conversation context
+  const context = await getContext(chatId);
+
   // Generate and send the review message
-  const reviewMessage = await generateOverdueTasksReview(overdueTasksWithTime);
+  const reviewMessage = await generateOverdueTasksReview(
+    overdueTasksWithTime,
+    context,
+  );
   await telegram.sendMessage(chatId, reviewMessage);
 }
