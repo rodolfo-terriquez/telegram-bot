@@ -2,11 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type { NotificationPayload } from "../lib/types.js";
 import * as telegram from "../lib/telegram.js";
 import * as redis from "../lib/redis.js";
-import {
-  scheduleReminder,
-  scheduleFollowUp,
-  verifySignature,
-} from "../lib/qstash.js";
+import { scheduleReminder, scheduleFollowUp, verifySignature } from "../lib/qstash.js";
 import {
   generateNaggingMessage,
   generateDailySummary,
@@ -16,7 +12,7 @@ import {
   generateFollowUpMessage,
   generateReminderMessage,
   generateFinalNagMessage,
-  generateOverdueTasksReview,
+  generateEndOfDayMessage,
   ConversationContext,
 } from "../lib/llm.js";
 
@@ -29,10 +25,7 @@ async function getContext(chatId: number): Promise<ConversationContext> {
   };
 }
 
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse,
-): Promise<void> {
+export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   // Only accept POST requests
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
@@ -80,8 +73,8 @@ export default async function handler(
         await handleFollowUp(payload);
         break;
 
-      case "overdue_review":
-        await handleOverdueReview(payload);
+      case "end_of_day":
+        await handleEndOfDay(payload);
         break;
 
       default:
@@ -115,12 +108,7 @@ async function handleReminder(payload: NotificationPayload): Promise<void> {
   // Schedule a follow-up in 5-10 minutes in case user doesn't respond
   try {
     const followUpMessageId = await scheduleFollowUp(chatId, taskId);
-    await redis.setPendingFollowUp(
-      chatId,
-      taskId,
-      task.content,
-      followUpMessageId,
-    );
+    await redis.setPendingFollowUp(chatId, taskId, task.content, followUpMessageId);
   } catch (error) {
     console.error("Failed to schedule follow-up:", error);
   }
@@ -152,11 +140,7 @@ async function handleNag(payload: NotificationPayload): Promise<void> {
   const context = await getContext(chatId);
 
   // Generate a contextual nagging message
-  const nagMessage = await generateNaggingMessage(
-    task,
-    task.naggingLevel,
-    context,
-  );
+  const nagMessage = await generateNaggingMessage(task, task.naggingLevel, context);
 
   await telegram.sendMessage(chatId, nagMessage);
 
@@ -187,6 +171,34 @@ async function handleDailySummary(payload: NotificationPayload): Promise<void> {
     redis.getPendingTasks(chatId),
   ]);
 
+  // Filter to find overdue tasks (nextReminder is in the past)
+  const now = Date.now();
+  const overdueTasks = tasks.filter((t) => t.nextReminder < now);
+
+  // Format overdue information for each task
+  const overdueTasksWithTime = overdueTasks.map((t) => {
+    const elapsed = now - t.nextReminder;
+    const minutes = Math.floor(elapsed / 60000);
+
+    let overdueBy: string;
+    if (minutes < 60) {
+      overdueBy = `${minutes} minute${minutes === 1 ? "" : "s"}`;
+    } else {
+      const hours = Math.floor(minutes / 60);
+      if (hours < 24) {
+        overdueBy = `${hours} hour${hours === 1 ? "" : "s"}`;
+      } else {
+        const days = Math.floor(hours / 24);
+        overdueBy = `${days} day${days === 1 ? "" : "s"}`;
+      }
+    }
+
+    return {
+      content: t.content,
+      overdueBy,
+    };
+  });
+
   // Only send summary if there's content
   if (dumps.length === 0 && tasks.length === 0) {
     return;
@@ -195,8 +207,8 @@ async function handleDailySummary(payload: NotificationPayload): Promise<void> {
   // Get conversation context
   const context = await getContext(chatId);
 
-  // Generate AI summary
-  const summary = await generateDailySummary(dumps, tasks, context);
+  // Generate AI summary with overdue tasks included
+  const summary = await generateDailySummary(dumps, tasks, overdueTasksWithTime, context);
 
   await telegram.sendMessage(chatId, summary);
 }
@@ -216,9 +228,7 @@ async function handleDailyCheckin(payload: NotificationPayload): Promise<void> {
   await redis.markAwaitingCheckin(chatId);
 }
 
-async function handleWeeklySummary(
-  payload: NotificationPayload,
-): Promise<void> {
+async function handleWeeklySummary(payload: NotificationPayload): Promise<void> {
   const { chatId } = payload;
 
   // Get weekly check-ins and brain dumps
@@ -237,12 +247,7 @@ async function handleWeeklySummary(
   const context = await getContext(chatId);
 
   // Generate weekly insights
-  const insights = await generateWeeklyInsights(
-    checkIns,
-    dumps,
-    completedTaskCount,
-    context,
-  );
+  const insights = await generateWeeklyInsights(checkIns, dumps, completedTaskCount, context);
 
   await telegram.sendMessage(chatId, insights);
 }
@@ -277,54 +282,14 @@ async function handleFollowUp(payload: NotificationPayload): Promise<void> {
   await redis.clearPendingFollowUp(chatId);
 }
 
-async function handleOverdueReview(
-  payload: NotificationPayload,
-): Promise<void> {
+async function handleEndOfDay(payload: NotificationPayload): Promise<void> {
   const { chatId } = payload;
-
-  // Get all pending tasks
-  const tasks = await redis.getPendingTasks(chatId);
-
-  // Filter to only overdue tasks (nextReminder is in the past)
-  const now = Date.now();
-  const overdueTasks = tasks.filter((t) => t.nextReminder < now);
-
-  // Only send if there are overdue tasks
-  if (overdueTasks.length === 0) {
-    return;
-  }
-
-  // Format overdue information for each task
-  const overdueTasksWithTime = overdueTasks.map((t) => {
-    const elapsed = now - t.nextReminder;
-    const minutes = Math.floor(elapsed / 60000);
-
-    let overdueBy: string;
-    if (minutes < 60) {
-      overdueBy = `${minutes} minute${minutes === 1 ? "" : "s"}`;
-    } else {
-      const hours = Math.floor(minutes / 60);
-      if (hours < 24) {
-        overdueBy = `${hours} hour${hours === 1 ? "" : "s"}`;
-      } else {
-        const days = Math.floor(hours / 24);
-        overdueBy = `${days} day${days === 1 ? "" : "s"}`;
-      }
-    }
-
-    return {
-      content: t.content,
-      overdueBy,
-    };
-  });
 
   // Get conversation context
   const context = await getContext(chatId);
 
-  // Generate and send the review message
-  const reviewMessage = await generateOverdueTasksReview(
-    overdueTasksWithTime,
-    context,
-  );
-  await telegram.sendMessage(chatId, reviewMessage);
+  // Generate a gentle end-of-day message
+  const message = await generateEndOfDayMessage(context);
+
+  await telegram.sendMessage(chatId, message);
 }

@@ -149,12 +149,7 @@ export interface ShowListIntent {
 export interface ModifyListIntent {
   type: "modify_list";
   listDescription?: string;
-  action:
-    | "add_items"
-    | "remove_items"
-    | "check_items"
-    | "uncheck_items"
-    | "rename";
+  action: "add_items" | "remove_items" | "check_items" | "uncheck_items" | "rename";
   items?: string[];
   newName?: string;
 }
@@ -214,7 +209,7 @@ export interface NotificationPayload {
     | "daily_checkin"
     | "weekly_summary"
     | "follow_up"
-    | "overdue_review";
+    | "end_of_day";
 }
 
 // Daily check-in data
@@ -234,5 +229,5 @@ export interface UserPreferences {
   checkinScheduleId?: string;
   weeklySummaryScheduleId?: string;
   dailySummaryScheduleId?: string;
-  overdueReviewScheduleId?: string;
+  endOfDayScheduleId?: string;
 }

@@ -20,8 +20,7 @@ function getClient(): OpenAI {
       baseURL: "https://openrouter.ai/api/v1",
       apiKey,
       defaultHeaders: {
-        "HTTP-Referer":
-          process.env.BASE_URL || "https://telegram-bot.vercel.app",
+        "HTTP-Referer": process.env.BASE_URL || "https://telegram-bot.vercel.app",
         "X-Title": "ADHD Support Bot",
       },
     });
@@ -90,9 +89,7 @@ ${context.summary}
 ---END CONTEXT---`;
   }
 
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: fullSystemPrompt },
-  ];
+  const messages: ChatCompletionMessageParam[] = [{ role: "system", content: fullSystemPrompt }];
 
   // Add recent conversation history if available
   // Format as JSON to clearly separate metadata from content
@@ -292,9 +289,7 @@ ${conversationSummary}
   }
 
   // Build messages array with conversation history
-  const messages: ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
-  ];
+  const messages: ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
 
   // Add a marker if we have both a summary and recent messages
   if (conversationSummary && conversationHistory.length > 0) {
@@ -351,9 +346,7 @@ ${conversationSummary}
 
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
-      jsonText = jsonText
-        .replace(/^```(?:json)?\n?/, "")
-        .replace(/\n?```$/, "");
+      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
     }
 
     // Try to find JSON object in the response
@@ -453,36 +446,6 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
   return content;
 }
 
-export async function generateOverdueTasksReview(
-  overdueTasks: { content: string; overdueBy: string }[],
-  context?: ConversationContext,
-): Promise<string> {
-  const client = getClient();
-
-  const taskList = overdueTasks
-    .map((t) => `- "${t.content}" (overdue by ${t.overdueBy})`)
-    .join("\n");
-
-  const systemPrompt = `${TAMA_PERSONALITY}
-
-Generate an end-of-day review message for overdue tasks. The user has tasks that were due earlier but haven't been completed or acknowledged. Present them gently and offer options: they can mark tasks done, reschedule them for tomorrow, or drop them entirely. Frame dropping tasks as a valid and healthy option. Keep it warm but concise. Don't use numbered lists - just present the tasks naturally.`;
-
-  const taskPrompt = `Here are the overdue tasks to review:\n${taskList}\n\nGenerate a gentle end-of-day review message.`;
-
-  const response = await client.chat.completions.create({
-    model: getModel(),
-    max_tokens: 300,
-    messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
-
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    return `A few things slipped by today. No worries - you can mark them done, reschedule, or drop them if they're no longer relevant.`;
-  }
-
-  return content;
-}
-
 export async function generateNaggingMessage(
   task: Task,
   naggingLevel: number,
@@ -526,23 +489,32 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
 export async function generateDailySummary(
   dumps: BrainDump[],
   pendingTasks: Task[],
+  overdueTasks: { content: string; overdueBy: string }[],
   context?: ConversationContext,
 ): Promise<string> {
   const client = getClient();
 
   const dumpsText =
-    dumps.length > 0
-      ? dumps.map((d) => `- ${d.content}`).join("\n")
-      : "No brain dumps today.";
+    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps today.";
 
   const tasksText =
     pendingTasks.length > 0
       ? pendingTasks.map((t) => `- ${t.content}`).join("\n")
       : "No pending tasks.";
 
+  const overdueText =
+    overdueTasks.length > 0
+      ? overdueTasks.map((t) => `- "${t.content}" (overdue by ${t.overdueBy})`).join("\n")
+      : "";
+
+  const overdueSection =
+    overdueTasks.length > 0
+      ? `\n\nSome tasks slipped by today:\n${overdueText}\n\nFor these overdue items, gently offer options: they can mark them done, reschedule for tomorrow, or drop them entirely. Frame dropping as a valid and healthy option.`
+      : "";
+
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Create a calm, organized daily summary. Help the user see any patterns or connections in their thoughts without being preachy. If there are pending tasks, present them neutrally - no guilt. Keep it concise and warm. No productivity judgment.`;
+Create a calm, organized daily summary. Help the user see any patterns or connections in their thoughts without being preachy. If there are pending tasks, present them neutrally - no guilt. Keep it concise and warm. No productivity judgment.${overdueTasks.length > 0 ? " If there are overdue tasks, present them gently and offer options to deal with them." : ""}`;
 
   const taskPrompt = `Here's my daily summary:
 
@@ -550,7 +522,7 @@ Brain dumps captured today:
 ${dumpsText}
 
 Pending tasks/reminders:
-${tasksText}
+${tasksText}${overdueSection}
 
 Please summarize this in a gentle, supportive way.`;
 
@@ -562,16 +534,17 @@ Please summarize this in a gentle, supportive way.`;
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
-    return `Daily Summary\n\nBrain dumps: ${dumps.length}\nPending tasks: ${pendingTasks.length}`;
+    let fallback = `Daily Summary\n\nBrain dumps: ${dumps.length}\nPending tasks: ${pendingTasks.length}`;
+    if (overdueTasks.length > 0) {
+      fallback += `\nOverdue: ${overdueTasks.length}`;
+    }
+    return fallback;
   }
 
   return `Daily Summary\n\n${content}`;
 }
 
-export function calculateNextNagDelay(
-  naggingLevel: number,
-  isImportant: boolean,
-): number {
+export function calculateNextNagDelay(naggingLevel: number, isImportant: boolean): number {
   // Base delays in minutes, escalating
   const baseDelays = [60, 120, 240, 360, 480]; // 1hr, 2hr, 4hr, 6hr, 8hr
 
@@ -582,9 +555,7 @@ export function calculateNextNagDelay(
   return Math.round(delay * multiplier);
 }
 
-export async function generateCheckinPrompt(
-  context?: ConversationContext,
-): Promise<string> {
+export async function generateCheckinPrompt(context?: ConversationContext): Promise<string> {
   const client = getClient();
 
   const systemPrompt = `${TAMA_PERSONALITY}
@@ -602,6 +573,29 @@ Generate a soft daily check-in. Ask the user to rate how their day felt on a sca
   const content = response.choices[0]?.message?.content;
   if (!content) {
     return "Hey. Quick check-in if you want - on a scale of 1-5, how did today feel? Notes are optional.";
+  }
+
+  return content;
+}
+
+export async function generateEndOfDayMessage(context?: ConversationContext): Promise<string> {
+  const client = getClient();
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate a gentle end-of-day message. Ask if there's anything the user wants to remember for tomorrow - a thought, a task, anything on their mind. Also wish them a good night. Keep it warm and cozy, like a soft send-off before sleep. Keep it to 2-3 sentences. Vary your wording to keep it fresh.`;
+
+  const taskPrompt = "Generate an end-of-day message.";
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 150,
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    return "Hey, before you drift off - anything you want to remember for tomorrow? Sleep well.";
   }
 
   return content;
@@ -630,15 +624,11 @@ export async function generateWeeklyInsights(
 
   const avgRating =
     checkIns.length > 0
-      ? (
-          checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length
-        ).toFixed(1)
+      ? (checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length).toFixed(1)
       : "N/A";
 
   const dumpsText =
-    dumps.length > 0
-      ? dumps.map((d) => `- ${d.content}`).join("\n")
-      : "No brain dumps this week.";
+    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps this week.";
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
@@ -746,10 +736,7 @@ export async function generateActionResponse(
       break;
     case "multiple_reminders_created":
       const reminderList = actionContext.reminders
-        .map(
-          (r) =>
-            `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`,
-        )
+        .map((r) => `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`)
         .join("\n");
       prompt = `The user just created ${actionContext.reminders.length} reminders:\n${reminderList}\nAcknowledge this briefly - confirm they're set.`;
       break;
@@ -769,8 +756,7 @@ export async function generateActionResponse(
     case "task_list":
       const formattedTasks = actionContext.tasks
         .map(
-          (t, i) =>
-            `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
+          (t, i) => `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
         )
         .join("\n");
       prompt = `Show the user their pending tasks in a clear format. Here are the tasks:\n${formattedTasks}\n\nPresent this list clearly. You can add a brief, warm intro or outro but keep it minimal.`;
@@ -887,9 +873,7 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
       case "list_created":
         return `Created your ${actionContext.name} list with ${actionContext.itemCount} items.`;
       case "lists_shown":
-        return actionContext.lists
-          .map((l) => `• ${l.name} (${l.itemCount} items)`)
-          .join("\n");
+        return actionContext.lists.map((l) => `• ${l.name} (${l.itemCount} items)`).join("\n");
       case "list_shown":
         return `${actionContext.name}:\n${actionContext.items.map((i) => `${i.isChecked ? "✓" : "○"} ${i.content}`).join("\n")}`;
       case "no_lists":

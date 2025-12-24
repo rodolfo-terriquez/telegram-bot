@@ -17,8 +17,7 @@ function getClient(): Client {
 function getNotifyUrl(): string {
   // Prefer BASE_URL (stable production URL) over VERCEL_URL (deployment-specific)
   const baseUrl =
-    process.env.BASE_URL ||
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
+    process.env.BASE_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null);
 
   if (!baseUrl) {
     throw new Error("BASE_URL or VERCEL_URL is not set");
@@ -36,9 +35,7 @@ export async function scheduleReminder(
   const client = getClient();
   const notifyUrl = getNotifyUrl();
 
-  console.log(
-    `QStash: Scheduling to ${notifyUrl} with delay ${delayMinutes * 60}s`,
-  );
+  console.log(`QStash: Scheduling to ${notifyUrl} with delay ${delayMinutes * 60}s`);
 
   const payload: NotificationPayload = {
     chatId,
@@ -132,10 +129,32 @@ export async function scheduleWeeklySummary(
   return schedule.scheduleId;
 }
 
-export async function scheduleFollowUp(
+export async function scheduleEndOfDay(
   chatId: number,
-  taskId: string,
+  cronExpression: string = "0 0 * * *", // Midnight daily
 ): Promise<string> {
+  const client = getClient();
+  const notifyUrl = getNotifyUrl();
+
+  const payload: NotificationPayload = {
+    chatId,
+    taskId: "",
+    type: "end_of_day",
+  };
+
+  const schedule = await client.schedules.create({
+    destination: notifyUrl,
+    cron: cronExpression,
+    body: JSON.stringify(payload),
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  return schedule.scheduleId;
+}
+
+export async function scheduleFollowUp(chatId: number, taskId: string): Promise<string> {
   const client = getClient();
   const notifyUrl = getNotifyUrl();
 
@@ -163,31 +182,6 @@ export async function scheduleFollowUp(
   return result.messageId;
 }
 
-export async function scheduleOverdueReview(
-  chatId: number,
-  cronExpression: string = "0 21 * * *", // 9 PM daily by default
-): Promise<string> {
-  const client = getClient();
-  const notifyUrl = getNotifyUrl();
-
-  const payload: NotificationPayload = {
-    chatId,
-    taskId: "",
-    type: "overdue_review",
-  };
-
-  const schedule = await client.schedules.create({
-    destination: notifyUrl,
-    cron: cronExpression,
-    body: JSON.stringify(payload),
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-
-  return schedule.scheduleId;
-}
-
 export async function deleteSchedule(scheduleId: string): Promise<void> {
   const client = getClient();
   try {
@@ -203,17 +197,12 @@ export async function cancelScheduledMessage(messageId: string): Promise<void> {
     await client.messages.delete(messageId);
   } catch {
     // Message may have already been delivered or doesn't exist
-    console.log(
-      `Could not cancel message ${messageId}, it may have already been processed`,
-    );
+    console.log(`Could not cancel message ${messageId}, it may have already been processed`);
   }
 }
 
 // Verify QStash webhook signature
-export async function verifySignature(
-  signature: string,
-  body: string,
-): Promise<boolean> {
+export async function verifySignature(signature: string, body: string): Promise<boolean> {
   const currentSigningKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
   const nextSigningKey = process.env.QSTASH_NEXT_SIGNING_KEY;
 
