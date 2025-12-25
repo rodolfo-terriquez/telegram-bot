@@ -92,17 +92,13 @@ ${context.summary}
   const messages: ChatCompletionMessageParam[] = [{ role: "system", content: fullSystemPrompt }];
 
   // Add recent conversation history if available
-  // Format as JSON to clearly separate metadata from content
+  // Use plain text format to avoid model mimicking JSON structure
   if (context?.messages && context.messages.length > 0) {
     for (const msg of context.messages) {
-      const contextEntry = {
-        timestamp: formatTimestamp(msg.timestamp),
-        role: msg.role,
-        content: msg.content,
-      };
+      const prefix = msg.role === "user" ? `[${formatTimestamp(msg.timestamp)}] ` : "";
       messages.push({
         role: msg.role,
-        content: JSON.stringify(contextEntry),
+        content: prefix + msg.content,
       });
     }
   }
@@ -130,8 +126,6 @@ Communication style:
 - Avoid absolutes ("must," "always," "never")
 - Avoid exclamation points except for small, quiet celebrations
 - Emoji use is minimal (some suggestions: 🐾 ☕ 🌱)
-
-Conversation history is provided as JSON objects with metadata fields (timestamp, role, content). Your responses should contain ONLY the message content - never include JSON formatting or metadata fields like timestamps in your actual responses.
 
 Reminders should be framed as soft nudges, never commands. Instead of "You should..." or "Don't forget...", say things like "Just a soft reminder..." or "This came up again, in case now's better."
 

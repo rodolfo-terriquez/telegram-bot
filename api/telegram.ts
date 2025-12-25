@@ -841,10 +841,25 @@ async function handleSetCheckinTime(
   const endOfDayCron = `0 0 * * *`; // Midnight
 
   // Schedule new check-in, daily summary, weekly summary, and end of day
-  const checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
-  const dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
-  const weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
-  const endOfDayScheduleId = await scheduleEndOfDay(chatId, endOfDayCron);
+  // Wrap in try-catch to handle QStash errors gracefully
+  let checkinScheduleId: string | undefined;
+  let dailySummaryScheduleId: string | undefined;
+  let weeklySummaryScheduleId: string | undefined;
+  let endOfDayScheduleId: string | undefined;
+
+  try {
+    checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
+    dailySummaryScheduleId = await scheduleDailySummary(chatId, cronExpression);
+    weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
+    endOfDayScheduleId = await scheduleEndOfDay(chatId, endOfDayCron);
+  } catch (error) {
+    console.error("Failed to create schedules:", error);
+    // Send error message to user but don't crash
+    const errorResponse =
+      "I had trouble setting up the schedules. The time preference is saved, but notifications might not work. You can try again later.";
+    await telegram.sendMessage(chatId, errorResponse);
+    return errorResponse;
+  }
 
   // Save preferences with all schedule IDs
   const prefs = await redis.setCheckinTime(chatId, hour, minute, checkinScheduleId);
