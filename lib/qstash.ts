@@ -3,6 +3,17 @@ import type { NotificationPayload } from "./types.js";
 
 let qstashClient: Client | null = null;
 
+// Get user's timezone from env (defaults to America/Los_Angeles)
+function getUserTimezone(): string {
+  return process.env.USER_TIMEZONE || "America/Los_Angeles";
+}
+
+// Prepend CRON_TZ to cron expression for timezone-aware scheduling
+function withTimezone(cronExpression: string): string {
+  const tz = getUserTimezone();
+  return `CRON_TZ=${tz} ${cronExpression}`;
+}
+
 function getClient(): Client {
   if (!qstashClient) {
     const token = process.env.QSTASH_TOKEN;
@@ -69,7 +80,7 @@ export async function scheduleDailySummary(
 
   const schedule = await client.schedules.create({
     destination: notifyUrl,
-    cron: cronExpression,
+    cron: withTimezone(cronExpression),
     body: JSON.stringify(payload),
     headers: {
       "Content-Type": "application/json",
@@ -94,7 +105,7 @@ export async function scheduleDailyCheckin(
 
   const schedule = await client.schedules.create({
     destination: notifyUrl,
-    cron: cronExpression,
+    cron: withTimezone(cronExpression),
     body: JSON.stringify(payload),
     headers: {
       "Content-Type": "application/json",
@@ -119,7 +130,7 @@ export async function scheduleWeeklySummary(
 
   const schedule = await client.schedules.create({
     destination: notifyUrl,
-    cron: cronExpression,
+    cron: withTimezone(cronExpression),
     body: JSON.stringify(payload),
     headers: {
       "Content-Type": "application/json",
@@ -144,7 +155,7 @@ export async function scheduleEndOfDay(
 
   const schedule = await client.schedules.create({
     destination: notifyUrl,
-    cron: cronExpression,
+    cron: withTimezone(cronExpression),
     body: JSON.stringify(payload),
     headers: {
       "Content-Type": "application/json",
