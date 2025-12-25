@@ -12,7 +12,9 @@ function getToken(): string {
 
 export async function sendMessage(chatId: number, text: string): Promise<void> {
   const token = getToken();
-  const response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
+
+  // Try with Markdown first
+  let response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -22,9 +24,31 @@ export async function sendMessage(chatId: number, text: string): Promise<void> {
     }),
   });
 
+  // If Markdown parsing fails, retry without parse_mode
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Failed to send message: ${error}`);
+    const errorText = await response.text();
+
+    // Check if it's a parsing error (common with different model outputs)
+    if (errorText.includes("can't parse") || errorText.includes("Bad Request")) {
+      console.warn("Markdown parsing failed, retrying without parse_mode:", errorText);
+
+      response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+        }),
+      });
+
+      if (!response.ok) {
+        const retryError = await response.text();
+        throw new Error(`Failed to send message: ${retryError}`);
+      }
+      return;
+    }
+
+    throw new Error(`Failed to send message: ${errorText}`);
   }
 }
 
@@ -87,11 +111,7 @@ export async function sendDocument(
   // Create form data with the file
   const formData = new FormData();
   formData.append("chat_id", chatId.toString());
-  formData.append(
-    "document",
-    new Blob([content], { type: "text/markdown" }),
-    filename,
-  );
+  formData.append("document", new Blob([content], { type: "text/markdown" }), filename);
   if (caption) {
     formData.append("caption", caption);
   }
