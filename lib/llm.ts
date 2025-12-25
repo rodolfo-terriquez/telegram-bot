@@ -19,6 +19,7 @@ function getClient(): OpenAI {
     openrouterClient = new OpenAI({
       baseURL: "https://openrouter.ai/api/v1",
       apiKey,
+      timeout: 20000, // 20 second timeout to leave room for other operations
       defaultHeaders: {
         "HTTP-Referer": process.env.BASE_URL || "https://telegram-bot.vercel.app",
         "X-Title": "ADHD Support Bot",
@@ -26,6 +27,15 @@ function getClient(): OpenAI {
     });
   }
   return openrouterClient;
+}
+
+// OpenRouter provider preferences - prioritize throughput for faster responses
+function getProviderPreferences(): Record<string, unknown> {
+  return {
+    provider: {
+      sort: "throughput", // Prioritize fastest providers (highest tokens/sec)
+    },
+  };
 }
 
 // Get user's timezone from env (defaults to America/Los_Angeles)
@@ -326,7 +336,8 @@ ${conversationSummary}
     model: getModel(),
     max_tokens: 500,
     messages,
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   // Extract text from the response
   const content = response.choices[0]?.message?.content;
@@ -378,7 +389,8 @@ Generate the initial reminder notification for a task. This is the first time yo
     model: getModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -404,7 +416,8 @@ Generate the final reminder message for a task. This is the last nudge - after t
     model: getModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -430,7 +443,8 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
     model: getModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -470,7 +484,8 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
     model: getModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -524,7 +539,8 @@ Please summarize this in a gentle, supportive way.`;
     model: getModel(),
     max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -562,7 +578,8 @@ Generate a soft daily check-in. Ask the user to rate how their day felt on a sca
     model: getModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -585,7 +602,8 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
     model: getModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -645,7 +663,8 @@ Please share any patterns you notice, gently.`;
     model: getModel(),
     max_tokens: 600,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -832,7 +851,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
     model: getModel(),
     max_tokens: 200,
     messages: buildContextMessages(systemPrompt, prompt, conversationContext),
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {
@@ -936,7 +956,8 @@ ${existingSummary ? "IMPORTANT: An existing summary from earlier in the conversa
         content: summaryContext,
       },
     ],
-  });
+    ...getProviderPreferences(),
+  } as Parameters<typeof client.chat.completions.create>[0]);
 
   const content = response.choices[0]?.message?.content;
   if (!content) {

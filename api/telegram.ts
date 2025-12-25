@@ -38,6 +38,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
+  // Track chatId outside try block so we can send error messages
+  let chatId: number | undefined;
+
   try {
     const update = req.body as TelegramUpdate;
 
@@ -48,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     }
 
     const { message } = update;
-    const chatId = message.chat.id;
+    chatId = message.chat.id;
 
     // Check if user is allowed (if ALLOWED_USERS is set)
     const allowedUsers = process.env.ALLOWED_USERS;
@@ -151,6 +154,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     res.status(200).json({ ok: true });
   } catch (error) {
     console.error("Webhook error:", error);
+
+    // Try to send an error message to the user if we have their chatId
+    if (chatId) {
+      try {
+        const isTimeout =
+          error instanceof Error &&
+          (error.message.includes("timeout") || error.message.includes("ETIMEDOUT"));
+
+        const errorMessage = isTimeout
+          ? "Sorry, I'm thinking a bit slowly right now. Could you try again in a moment?"
+          : "Something went wrong on my end. Could you try that again?";
+
+        await telegram.sendMessage(chatId, errorMessage);
+      } catch {
+        // If we can't even send the error message, just log it
+        console.error("Failed to send error message to user");
+      }
+    }
+
     res.status(500).json({ error: "Internal server error" });
   }
 }
