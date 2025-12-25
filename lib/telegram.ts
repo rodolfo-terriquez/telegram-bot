@@ -12,6 +12,7 @@ function getToken(): string {
 
 export async function sendMessage(chatId: number, text: string): Promise<void> {
   const token = getToken();
+  console.log(`[Telegram] Sending message to ${chatId}, length: ${text.length}`);
 
   // Try with Markdown first
   let response = await fetch(`${TELEGRAM_API}${token}/sendMessage`, {
@@ -45,11 +46,13 @@ export async function sendMessage(chatId: number, text: string): Promise<void> {
         const retryError = await response.text();
         throw new Error(`Failed to send message: ${retryError}`);
       }
+      console.log(`[Telegram] Message sent successfully (plain text fallback)`);
       return;
     }
 
     throw new Error(`Failed to send message: ${errorText}`);
   }
+  console.log(`[Telegram] Message sent successfully`);
 }
 
 export async function getFilePath(fileId: string): Promise<string> {

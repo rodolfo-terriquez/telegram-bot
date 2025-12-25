@@ -144,13 +144,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     };
 
     // Handle the intent
+    console.log(`[${chatId}] Handling intent: ${intent.type}`);
     const response = await handleIntent(chatId, intent, context);
+    console.log(`[${chatId}] Intent handled, response length: ${response?.length ?? 0}`);
 
     // Save to conversation history
     if (response) {
       await redis.addToConversation(chatId, userText, response);
     }
 
+    console.log(`[${chatId}] Request completed successfully`);
     res.status(200).json({ ok: true });
   } catch (error) {
     console.error("Webhook error:", error);
