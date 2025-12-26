@@ -399,7 +399,7 @@ export async function generateReminderMessage(
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Generate the initial reminder notification for a task. This is the first time you're nudging the user about this task at the time they requested. Keep it to 1-2 short sentences. Frame it as a soft nudge, not a command. Let them know they can reply "done" when finished, but phrase it gently. Examples of tone: "Just a soft reminder about...", "This came up - ...", "Passing this along: ..."`;
+Generate the initial reminder notification for a task. This is the first time you're nudging the user about this task at the time they requested. Keep it to 1-2 short sentences. Frame it as a soft nudge, not a command. Examples of tone: "Just a soft reminder about...", "This came up - ...", "Passing this along: ..."`;
 
   const taskPrompt = `Send a reminder about: "${taskContent}"`;
 
@@ -425,7 +425,7 @@ export async function generateFinalNagMessage(
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Generate the final reminder message for a task. This is the last nudge - after this, you won't remind them again about this task. Keep it warm and pressure-free. Let them know it's okay and the task is still in their list whenever they're ready. Keep it to 1-2 short sentences.`;
+Generate the final reminder message for a task. This is the last nudge - after this, you won't remind them again about this task. Keep it warm and pressure-free. Let them know it's okay and the task is still in their list whenever they're ready.`;
 
   const taskPrompt = `Send the final reminder about: "${taskContent}"`;
 
@@ -451,7 +451,7 @@ export async function generateFollowUpMessage(
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Generate a very brief follow-up to a reminder you sent a few minutes ago. The user hasn't responded yet, so this is just a gentle "hey, still here" nudge. Keep it to one short sentence. Don't repeat the task details - just a soft check-in. Examples of tone: "Just making sure this reached you.", "Still here if you need me.", "Bumping this up in case it got buried."`;
+Generate a very brief follow-up to a reminder you sent a few minutes ago. The user hasn't responded yet, so this is just a gentle "hey, still here" nudge. Keep it to one short sentence. Don't repeat the task details - just a soft check-in.`;
 
   const taskPrompt = `I sent a reminder about "${taskContent}" a few minutes ago but haven't heard back. Generate a brief follow-up.`;
 
@@ -723,10 +723,10 @@ export async function generateActionResponse(
       prompt = `The user just captured a thought/brain dump: "${actionContext.content}". Acknowledge that it's been saved and they'll see it in their daily summary. Keep it very brief.`;
       break;
     case "task_completed":
-      prompt = `The user just marked "${actionContext.task}" as done. Give them a calm, proportional acknowledgment. Remember: "Nice. That counts." style, not over-the-top celebration.`;
+      prompt = `The user just marked "${actionContext.task}" as done. Give them a calm, proportional acknowledgment.`;
       break;
     case "task_cancelled":
-      prompt = `The user just cancelled the task "${actionContext.task}". Acknowledge neutrally - it's okay to change priorities or drop things.`;
+      prompt = `The user just cancelled the task "${actionContext.task}". Acknowledge neutrally.`;
       break;
     case "multiple_tasks_cancelled":
       const taskList = actionContext.tasks.map((t) => `- "${t}"`).join("\n");
@@ -742,13 +742,13 @@ export async function generateActionResponse(
       prompt = `Show the user their pending tasks in a clear format. Here are the tasks:\n${formattedTasks}\n\nPresent this list clearly. You can add a brief, warm intro or outro but keep it minimal.`;
       break;
     case "no_tasks":
-      prompt = `The user has no pending tasks or reminders. Let them know in a warm, brief way - they have a clear plate.`;
+      prompt = `The user has no pending tasks or reminders. Let them know in a warm way.`;
       break;
     case "task_not_found":
-      prompt = `The user tried to mark a task as ${actionContext.action === "done" ? "done" : "cancelled"}, but I couldn't find a matching pending task. Gently let them know and suggest they can say "list tasks" to see what's pending.`;
+      prompt = `The user tried to mark a task as ${actionContext.action === "done" ? "done" : "cancelled"}, but I couldn't find a matching pending task. Gently let them know.`;
       break;
     case "checkin_logged":
-      prompt = `The user just completed their daily check-in with a rating of ${actionContext.rating}/5.${actionContext.hasNotes ? " They also included some notes." : ""} Acknowledge briefly - no big fanfare, just a warm receipt.`;
+      prompt = `The user just completed their daily check-in with a rating of ${actionContext.rating}/5.${actionContext.hasNotes ? " They also included some notes." : ""} Respond appropriately to their rating.`;
       break;
     case "checkin_time_set":
       prompt = `The user just set their daily check-in time to ${actionContext.timeStr}. They'll also get a daily summary and weekly summary on Sundays at this time. Confirm this briefly.`;
@@ -761,12 +761,9 @@ export async function generateActionResponse(
       break;
     case "lists_shown": {
       const listSummaries = actionContext.lists
-        .map(
-          (l) =>
-            `- "${l.name}": ${l.itemCount} items (${l.checkedCount} checked)${l.hasReminder ? " - has reminder" : ""}`,
-        )
+        .map((l) => `- ${l.name} - ${l.itemCount}`)
         .join("\n");
-      prompt = `Show the user their lists. Here they are:\n${listSummaries}\n\nPresent this in a clear, warm way.`;
+      prompt = `Show the user their lists in this exact format (name - count):\n${listSummaries}\n\nJust add a brief intro, then list them exactly as shown above. Keep it minimal.`;
       break;
     }
     case "list_shown": {
@@ -780,10 +777,10 @@ export async function generateActionResponse(
       break;
     }
     case "no_lists":
-      prompt = `The user has no lists yet. Let them know warmly - they can create one anytime.`;
+      prompt = `The user has no lists yet. Let them know warmly.`;
       break;
     case "list_not_found":
-      prompt = `The user tried to access a list but I couldn't find a matching one. Gently let them know and suggest they say "show my lists" to see what's available.`;
+      prompt = `The user tried to access a list but I couldn't find a matching one. Gently let them know.`;
       break;
     case "list_modified": {
       const itemsStr = actionContext.items?.join(", ") || "";
@@ -792,7 +789,7 @@ export async function generateActionResponse(
       } else if (actionContext.action === "remove_items") {
         prompt = `Removed ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly.`;
       } else if (actionContext.action === "check_items") {
-        prompt = `Checked off ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly - maybe a small "nice" for progress.`;
+        prompt = `Checked off ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly.`;
       } else if (actionContext.action === "uncheck_items") {
         prompt = `Unchecked ${itemsStr} from the "${actionContext.name}" list. Acknowledge briefly.`;
       } else if (actionContext.action === "rename") {
@@ -803,7 +800,7 @@ export async function generateActionResponse(
       break;
     }
     case "list_deleted":
-      prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally - it's okay to clean up.`;
+      prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally.`;
       break;
     case "task_completed_with_list":
       prompt = `The user just completed "${actionContext.task}" which had a linked list "${actionContext.listName}". Both the task and list are now done. Give a calm acknowledgment.`;
@@ -854,7 +851,7 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Created your ${actionContext.name} list with ${actionContext.itemCount} items.`;
       case "lists_shown":
         return actionContext.lists
-          .map((l) => `• ${l.name} (${l.itemCount} items)`)
+          .map((l) => `- ${l.name} - ${l.itemCount}`)
           .join("\n");
       case "list_shown":
         return `${actionContext.name}:\n${actionContext.items.map((i) => `${i.isChecked ? "✓" : "○"} ${i.content}`).join("\n")}`;
