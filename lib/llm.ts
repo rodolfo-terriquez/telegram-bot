@@ -205,6 +205,7 @@ Possible intents:
    - Examples: "I need to pick up a package", "gotta call the dentist", "should return those shoes"
    - The key difference from reminder: NO time specified
    - The key difference from brain_dump: it's an ACTION they need to take, not just a thought
+   - If the user asks to SEE their inbox (e.g. "what's in my inbox", "check the inbox"), use "show_list" with listDescription "Inbox" instead
 
 5. "mark_done" - User indicates they completed a task
    - Keywords: "done", "finished", "completed", "did it"
@@ -223,6 +224,7 @@ Possible intents:
 
 8. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
+   - Do NOT use for inbox requests; inbox is a list ("show_list" with listDescription "Inbox")
 
 9. "checkin_response" - User is responding to a daily check-in prompt
    - They provide a rating from 1-5 (how organized they felt)
@@ -256,8 +258,8 @@ Possible intents:
     - Keywords: "show lists", "my lists", "what lists", "all lists"
 
 14. "show_list" - User wants to see a specific list
-    - Keywords: "show the grocery list", "what's on my packing list"
-    - Include listDescription for fuzzy matching
+    - Keywords: "show the grocery list", "what's on my packing list", "check my inbox"
+    - Include listDescription for fuzzy matching (use "Inbox" when the user asks about their inbox)
 
 15. "modify_list" - User wants to change an existing list
     - Add items: "add milk to my grocery list"
@@ -285,7 +287,7 @@ Response formats:
 - list_tasks: {"type": "list_tasks"}
 - create_list: {"type": "create_list", "name": "list name", "items": ["item1", "item2"]}
 - show_lists: {"type": "show_lists"}
-- show_list: {"type": "show_list", "listDescription": "optional fuzzy match"}
+- show_list: {"type": "show_list", "listDescription": "optional fuzzy match (use \"Inbox\" for inbox requests)"}
 - modify_list: {"type": "modify_list", "listDescription": "optional", "action": "add_items|remove_items|check_items|uncheck_items|rename", "items": ["item1"], "newName": "optional"}
 - delete_list: {"type": "delete_list", "listDescription": "optional fuzzy match"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
