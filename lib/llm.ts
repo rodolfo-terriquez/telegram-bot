@@ -289,7 +289,7 @@ Response formats:
 - delete_list: {"type": "delete_list", "listDescription": "optional fuzzy match"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
-- conversation: {"type": "conversation", "message": "summary of what user said or wants to discuss"}
+- conversation: {"type": "conversation", "message": "the user's exact message verbatim"}
 
 Be lenient and understanding. ADHD users may send fragmented or unclear messages - try to understand their intent. Remember: you're sitting beside the user, not above them.`;
 
