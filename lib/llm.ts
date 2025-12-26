@@ -1,7 +1,14 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { initLogger, wrapOpenAI } from "braintrust";
 import type { Intent, Task, BrainDump, CheckIn } from "./types.js";
 import type { ConversationMessage } from "./redis.js";
+
+// Initialize Braintrust logger for tracing
+const logger = initLogger({
+  projectName: "Tama ADHD Bot",
+  apiKey: process.env.BRAINTRUST_API_KEY,
+});
 
 let openrouterClient: OpenAI | null = null;
 
@@ -22,15 +29,19 @@ function getClient(): OpenAI {
     if (!apiKey) {
       throw new Error("OPENROUTER_API_KEY is not set");
     }
-    openrouterClient = new OpenAI({
-      baseURL: "https://openrouter.ai/api/v1",
-      apiKey,
-      timeout: 20000, // 20 second timeout to leave room for other operations
-      defaultHeaders: {
-        "HTTP-Referer": process.env.BASE_URL || "https://telegram-bot.vercel.app",
-        "X-Title": "ADHD Support Bot",
-      },
-    });
+    // Wrap with Braintrust for automatic tracing of all LLM calls
+    openrouterClient = wrapOpenAI(
+      new OpenAI({
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey,
+        timeout: 20000, // 20 second timeout to leave room for other operations
+        defaultHeaders: {
+          "HTTP-Referer":
+            process.env.BASE_URL || "https://telegram-bot.vercel.app",
+          "X-Title": "ADHD Support Bot",
+        },
+      }),
+    );
   }
   return openrouterClient;
 }
@@ -96,13 +107,16 @@ ${context.summary}
 ---END CONTEXT---`;
   }
 
-  const messages: ChatCompletionMessageParam[] = [{ role: "system", content: fullSystemPrompt }];
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: fullSystemPrompt },
+  ];
 
   // Add recent conversation history if available
   // Use plain text format to avoid model mimicking JSON structure
   if (context?.messages && context.messages.length > 0) {
     for (const msg of context.messages) {
-      const prefix = msg.role === "user" ? `[${formatTimestamp(msg.timestamp)}] ` : "";
+      const prefix =
+        msg.role === "user" ? `[${formatTimestamp(msg.timestamp)}] ` : "";
       messages.push({
         role: msg.role,
         content: prefix + msg.content,
@@ -294,7 +308,9 @@ ${conversationSummary}
   }
 
   // Build messages array with conversation history
-  const messages: ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
+  const messages: ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+  ];
 
   // Add a marker if we have both a summary and recent messages
   if (conversationSummary && conversationHistory.length > 0) {
@@ -351,7 +367,9 @@ ${conversationSummary}
 
     // Remove markdown code blocks if present
     if (jsonText.startsWith("```")) {
-      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+      jsonText = jsonText
+        .replace(/^```(?:json)?\n?/, "")
+        .replace(/\n?```$/, "");
     }
 
     // Try to find JSON object in the response
@@ -491,65 +509,10 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
   return content;
 }
 
-export async function generateDailySummary(
-  dumps: BrainDump[],
-  pendingTasks: Task[],
-  overdueTasks: { content: string; overdueBy: string }[],
-  context?: ConversationContext,
-): Promise<string> {
-  const client = getClient();
-
-  const dumpsText =
-    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps today.";
-
-  const tasksText =
-    pendingTasks.length > 0
-      ? pendingTasks.map((t) => `- ${t.content}`).join("\n")
-      : "No pending tasks.";
-
-  const overdueText =
-    overdueTasks.length > 0
-      ? overdueTasks.map((t) => `- "${t.content}" (overdue by ${t.overdueBy})`).join("\n")
-      : "";
-
-  const overdueSection =
-    overdueTasks.length > 0
-      ? `\n\nSome tasks slipped by today:\n${overdueText}\n\nFor these overdue items, gently offer options: they can mark them done, reschedule for tomorrow, or drop them entirely. Frame dropping as a valid and healthy option.`
-      : "";
-
-  const systemPrompt = `${TAMA_PERSONALITY}
-
-Create a calm, organized daily summary. Help the user see any patterns or connections in their thoughts without being preachy. If there are pending tasks, present them neutrally - no guilt. Keep it concise and warm. No productivity judgment.${overdueTasks.length > 0 ? " If there are overdue tasks, present them gently and offer options to deal with them." : ""}`;
-
-  const taskPrompt = `Here's my daily summary:
-
-Brain dumps captured today:
-${dumpsText}
-
-Pending tasks/reminders:
-${tasksText}${overdueSection}
-
-Please summarize this in a gentle, supportive way.`;
-
-  const response = await client.chat.completions.create({
-    model: getModel(),
-    max_tokens: 500,
-    messages: buildContextMessages(systemPrompt, taskPrompt, context),
-  });
-
-  const content = response.choices[0]?.message?.content;
-  if (!content) {
-    let fallback = `Daily Summary\n\nBrain dumps: ${dumps.length}\nPending tasks: ${pendingTasks.length}`;
-    if (overdueTasks.length > 0) {
-      fallback += `\nOverdue: ${overdueTasks.length}`;
-    }
-    return fallback;
-  }
-
-  return `Daily Summary\n\n${content}`;
-}
-
-export function calculateNextNagDelay(naggingLevel: number, isImportant: boolean): number {
+export function calculateNextNagDelay(
+  naggingLevel: number,
+  isImportant: boolean,
+): number {
   // Base delays in minutes, escalating
   const baseDelays = [60, 120, 240, 360, 480]; // 1hr, 2hr, 4hr, 6hr, 8hr
 
@@ -560,7 +523,9 @@ export function calculateNextNagDelay(naggingLevel: number, isImportant: boolean
   return Math.round(delay * multiplier);
 }
 
-export async function generateCheckinPrompt(context?: ConversationContext): Promise<string> {
+export async function generateCheckinPrompt(
+  context?: ConversationContext,
+): Promise<string> {
   const client = getClient();
 
   const systemPrompt = `${TAMA_PERSONALITY}
@@ -583,7 +548,9 @@ Generate a soft daily check-in. Ask the user to rate how their day felt on a sca
   return content;
 }
 
-export async function generateEndOfDayMessage(context?: ConversationContext): Promise<string> {
+export async function generateEndOfDayMessage(
+  context?: ConversationContext,
+): Promise<string> {
   const client = getClient();
 
   const systemPrompt = `${TAMA_PERSONALITY}
@@ -629,11 +596,15 @@ export async function generateWeeklyInsights(
 
   const avgRating =
     checkIns.length > 0
-      ? (checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length).toFixed(1)
+      ? (
+          checkIns.reduce((sum, c) => sum + c.rating, 0) / checkIns.length
+        ).toFixed(1)
       : "N/A";
 
   const dumpsText =
-    dumps.length > 0 ? dumps.map((d) => `- ${d.content}`).join("\n") : "No brain dumps this week.";
+    dumps.length > 0
+      ? dumps.map((d) => `- ${d.content}`).join("\n")
+      : "No brain dumps this week.";
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
@@ -741,7 +712,10 @@ export async function generateActionResponse(
       break;
     case "multiple_reminders_created":
       const reminderList = actionContext.reminders
-        .map((r) => `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`)
+        .map(
+          (r) =>
+            `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`,
+        )
         .join("\n");
       prompt = `The user just created ${actionContext.reminders.length} reminders:\n${reminderList}\nAcknowledge this briefly - confirm they're set.`;
       break;
@@ -761,7 +735,8 @@ export async function generateActionResponse(
     case "task_list":
       const formattedTasks = actionContext.tasks
         .map(
-          (t, i) => `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
+          (t, i) =>
+            `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
         )
         .join("\n");
       prompt = `Show the user their pending tasks in a clear format. Here are the tasks:\n${formattedTasks}\n\nPresent this list clearly. You can add a brief, warm intro or outro but keep it minimal.`;
@@ -878,7 +853,9 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
       case "list_created":
         return `Created your ${actionContext.name} list with ${actionContext.itemCount} items.`;
       case "lists_shown":
-        return actionContext.lists.map((l) => `• ${l.name} (${l.itemCount} items)`).join("\n");
+        return actionContext.lists
+          .map((l) => `• ${l.name} (${l.itemCount} items)`)
+          .join("\n");
       case "list_shown":
         return `${actionContext.name}:\n${actionContext.items.map((i) => `${i.isChecked ? "✓" : "○"} ${i.content}`).join("\n")}`;
       case "no_lists":

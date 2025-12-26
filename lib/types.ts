@@ -149,7 +149,12 @@ export interface ShowListIntent {
 export interface ModifyListIntent {
   type: "modify_list";
   listDescription?: string;
-  action: "add_items" | "remove_items" | "check_items" | "uncheck_items" | "rename";
+  action:
+    | "add_items"
+    | "remove_items"
+    | "check_items"
+    | "uncheck_items"
+    | "rename";
   items?: string[];
   newName?: string;
 }
@@ -205,7 +210,6 @@ export interface NotificationPayload {
   type:
     | "reminder"
     | "nag"
-    | "daily_summary"
     | "daily_checkin"
     | "weekly_summary"
     | "follow_up"
@@ -228,6 +232,5 @@ export interface UserPreferences {
   checkinTime: string; // "HH:MM" format, default "20:00"
   checkinScheduleId?: string;
   weeklySummaryScheduleId?: string;
-  dailySummaryScheduleId?: string;
   endOfDayScheduleId?: string;
 }

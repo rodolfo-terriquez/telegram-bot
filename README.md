@@ -76,15 +76,6 @@ curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
   -d '{"url": "https://your-app.vercel.app/api/telegram"}'
 ```
 
-### 5. (Optional) Set Up Daily Summary
-
-Create a QStash schedule in the Upstash dashboard:
-- **Destination**: `https://your-app.vercel.app/api/notify`
-- **Cron**: `0 20 * * *` (8 PM daily)
-- **Body**: `{"chatId": YOUR_CHAT_ID, "taskId": "", "type": "daily_summary"}`
-
-To get your chat ID, send a message to your bot and check the Vercel function logs.
-
 ## Usage
 
 ### Reminders
