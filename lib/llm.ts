@@ -798,7 +798,7 @@ export async function generateActionResponse(
       prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally.`;
       break;
     case "conversation":
-      prompt = "Respond naturally to the user.";
+      prompt = `The user said: "${actionContext.message}"\n\nRespond naturally to them.`;
       break;
     case "task_completed_with_list":
       prompt = `The user just completed "${actionContext.task}" which had a linked list "${actionContext.listName}". Both the task and list are now done. Give a calm acknowledgment.`;
