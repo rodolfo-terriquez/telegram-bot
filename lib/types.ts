@@ -49,6 +49,7 @@ export type Intent =
   | MultipleRemindersIntent
   | ReminderWithListIntent
   | BrainDumpIntent
+  | InboxIntent
   | MarkDoneIntent
   | CancelTaskIntent
   | CancelMultipleTasksIntent
@@ -83,6 +84,11 @@ export interface MultipleRemindersIntent {
 export interface BrainDumpIntent {
   type: "brain_dump";
   content: string;
+}
+
+export interface InboxIntent {
+  type: "inbox";
+  item: string;
 }
 
 export interface MarkDoneIntent {

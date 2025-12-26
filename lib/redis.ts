@@ -228,6 +228,38 @@ export async function createList(
   return list;
 }
 
+// Inbox is a special list with a reserved name
+const INBOX_NAME = "Inbox";
+
+export async function getOrCreateInbox(chatId: number): Promise<List> {
+  // First, try to find existing inbox
+  const lists = await getActiveLists(chatId);
+  const inbox = lists.find((l) => l.name === INBOX_NAME);
+
+  if (inbox) {
+    return inbox;
+  }
+
+  // Create new inbox list
+  return createList(chatId, INBOX_NAME, []);
+}
+
+export async function addToInbox(chatId: number, item: string): Promise<List> {
+  const inbox = await getOrCreateInbox(chatId);
+
+  const newItem: ListItem = {
+    id: generateId(),
+    content: item,
+    isChecked: false,
+    createdAt: Date.now(),
+  };
+
+  inbox.items.push(newItem);
+  await updateList(inbox);
+
+  return inbox;
+}
+
 export async function getList(
   chatId: number,
   listId: string,

@@ -137,12 +137,11 @@ export default async function handler(
       redis.isAwaitingCheckin(chatId),
     ]);
 
-    // Parse intent using Claude (with conversation context and summary)
+    // Parse intent using Claude (with recent conversation for context)
     const intent = await parseIntent(
       userText,
       conversationData.messages,
       isAwaitingCheckin,
-      conversationData.summary,
     );
 
     // Build conversation context for response generation
@@ -205,6 +204,9 @@ async function handleIntent(
 
     case "brain_dump":
       return await handleBrainDump(chatId, intent, context);
+
+    case "inbox":
+      return await handleInbox(chatId, intent, context);
 
     case "mark_done":
       return await handleMarkDone(chatId, intent, context);
@@ -367,6 +369,25 @@ async function handleBrainDump(
     {
       type: "brain_dump_saved",
       content: intent.content,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleInbox(
+  chatId: number,
+  intent: { type: "inbox"; item: string },
+  context: ConversationContext,
+): Promise<string> {
+  const inbox = await redis.addToInbox(chatId, intent.item);
+
+  const response = await generateActionResponse(
+    {
+      type: "inbox_item_added",
+      item: intent.item,
+      inboxCount: inbox.items.length,
     },
     context,
   );

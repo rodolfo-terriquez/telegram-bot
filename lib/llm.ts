@@ -160,11 +160,8 @@ When asked for advice, share gently—things that sometimes help people, not ins
 
 // Base system prompt - timestamp will be prepended dynamically
 // Intent parsing prompt - references TAMA_PERSONALITY for consistent character
-const BASE_SYSTEM_PROMPT = `${TAMA_PERSONALITY}
-
----
-
-You are integrated into a Telegram bot. Your job is to parse user messages and determine their intent.
+// Intent parsing prompt - stripped down, no personality needed since output is JSON
+const INTENT_PARSING_PROMPT = `You parse user messages and determine their intent. Return JSON only.
 
 CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no emojis, just the raw JSON object.
 - Do NOT mimic the format of previous responses shown in conversation history
@@ -196,39 +193,47 @@ Possible intents:
    - Each reminder can have its own delay time and importance level
    - If a task doesn't have a specific time, use a reasonable default (e.g., 60 minutes)
 
-3. "brain_dump" - User wants to quickly capture a thought/idea
+3. "brain_dump" - User wants to quickly capture a thought/idea (NOT actionable)
    - Keywords: "dump", "note", "idea", "thought", "remember this", just random stream of consciousness
-   - If the message seems like a random thought without a clear action, treat it as a brain dump
+   - Use for non-actionable thoughts, musings, or things to remember that don't require doing anything
+   - Examples: "idea: what if we tried a different approach", "thought: the meeting went well"
 
-4. "mark_done" - User indicates they completed a task
+4. "inbox" - User mentions something actionable but WITHOUT a specific time
+   - Use when the user mentions a task/action but doesn't say when to do it or be reminded
+   - This goes to their "Inbox" list for later processing
+   - Examples: "I need to pick up a package", "gotta call the dentist", "should return those shoes"
+   - The key difference from reminder: NO time specified
+   - The key difference from brain_dump: it's an ACTION they need to take, not just a thought
+
+5. "mark_done" - User indicates they completed a task
    - Keywords: "done", "finished", "completed", "did it"
    - Include any task description they mention to help match it
 
-5. "cancel_task" - User wants to cancel/delete a SINGLE task without completing it
+6. "cancel_task" - User wants to cancel/delete a SINGLE task without completing it
    - Keywords: "cancel", "delete", "remove", "nevermind", "forget about", "skip", "stop reminding"
    - This is different from mark_done - use this when the user wants to cancel a task, not when they completed it
    - Include any task description they mention to help match it
    - Use this when the user mentions only ONE task
 
-6. "cancel_multiple_tasks" - User wants to cancel/delete MULTIPLE tasks at once
+7. "cancel_multiple_tasks" - User wants to cancel/delete MULTIPLE tasks at once
    - Use when user mentions 2 or more tasks to cancel in one message
    - Examples: "cancel the groceries and laundry reminders", "delete tasks 1 and 3", "remove the meeting and call reminders"
    - Extract each task description into the taskDescriptions array
 
-7. "list_tasks" - User wants to see their pending tasks/reminders
+8. "list_tasks" - User wants to see their pending tasks/reminders
    - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
 
-8. "checkin_response" - User is responding to a daily check-in prompt
+9. "checkin_response" - User is responding to a daily check-in prompt
    - They provide a rating from 1-5 (how organized they felt)
    - May include optional notes about their day
    - Examples: "3", "4 - pretty good day", "2, felt scattered", "5! crushed it today"
 
-9. "set_checkin_time" - User wants to change their daily check-in time
+10. "set_checkin_time" - User wants to change their daily check-in time
    - Keywords: "set checkin", "change checkin time", "checkin at"
    - Extract hour (0-23) and minute (0-59)
    - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
 
-10. "reminder_with_list" - User wants a reminder AND is providing a list of items
+11. "reminder_with_list" - User wants a reminder AND is providing a list of items
     - Triggers when they mention multiple items to remember (shopping list, packing, errands, etc.)
     - Extract a general task description for the reminder
     - Extract or infer a list name from context (e.g., "groceries", "packing", "birthday gifts")
@@ -239,39 +244,40 @@ Possible intents:
       - "at 5pm remind me to pack laptop, charger, and notebook"
         -> task: "pack for trip", listName: "Packing", items: ["laptop", "charger", "notebook"]
 
-11. "create_list" - User wants to create a standalone list without a reminder
+12. "create_list" - User wants to create a standalone list without a reminder
     - Keywords: "make a list", "create a list", "start a list", "list for me"
     - No time/reminder component
     - Examples:
       - "make a list of birthday gifts - tv for mom, switch for brother"
       - "I'm thinking about movies to watch: inception, interstellar, tenet"
 
-12. "show_lists" - User wants to see all their lists
+13. "show_lists" - User wants to see all their lists
     - Keywords: "show lists", "my lists", "what lists", "all lists"
 
-13. "show_list" - User wants to see a specific list
+14. "show_list" - User wants to see a specific list
     - Keywords: "show the grocery list", "what's on my packing list"
     - Include listDescription for fuzzy matching
 
-14. "modify_list" - User wants to change an existing list
+15. "modify_list" - User wants to change an existing list
     - Add items: "add milk to my grocery list"
     - Remove items: "remove bread from shopping list"
     - Check items: "check off eggs", "got the bread"
     - Uncheck items: "uncheck milk"
     - Rename: "rename grocery list to shopping"
 
-15. "delete_list" - User wants to delete a list
+16. "delete_list" - User wants to delete a list
     - Keywords: "delete the list", "remove my list", "get rid of list"
 
-16. "conversation" - General chat or unclear intent
-   - Respond in Tama's voice using the personality guidelines above
-   - If you can't determine the intent, gently ask clarifying questions
+17. "conversation" - General chat or unclear intent
+   - Generate a brief, warm response
+   - If unclear, gently ask what they need help with
 
 Response formats:
 - reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
 - multiple_reminders: {"type": "multiple_reminders", "reminders": [{"task": "description", "delayMinutes": number, "isImportant": boolean}, ...]}
 - reminder_with_list: {"type": "reminder_with_list", "task": "description", "listName": "name", "items": ["item1", "item2"], "delayMinutes": number, "isImportant": boolean}
 - brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
+- inbox: {"type": "inbox", "item": "the actionable item to add to inbox"}
 - mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
 - cancel_task: {"type": "cancel_task", "taskDescription": "optional description to match"}
 - cancel_multiple_tasks: {"type": "cancel_multiple_tasks", "taskDescriptions": ["description1", "description2", ...]}
@@ -291,38 +297,21 @@ export async function parseIntent(
   userMessage: string,
   conversationHistory: ConversationMessage[] = [],
   isAwaitingCheckin: boolean = false,
-  conversationSummary?: string,
 ): Promise<Intent> {
   const client = getClient();
 
-  // Build system prompt with current timestamp and optional conversation summary
-  let systemPrompt = getCurrentTimeContext() + BASE_SYSTEM_PROMPT;
+  // Build system prompt with current timestamp (no personality needed for JSON parsing)
+  const systemPrompt = getCurrentTimeContext() + INTENT_PARSING_PROMPT;
 
-  // Add conversation summary if available
-  if (conversationSummary) {
-    systemPrompt += `\n\n---BEGIN CONTEXT SUMMARY---
-The following is a summary of earlier parts of this conversation. This is NOT part of the current conversation - it's background context to help you understand what was discussed before. The actual recent messages will follow separately.
-
-${conversationSummary}
----END CONTEXT SUMMARY---`;
-  }
-
-  // Build messages array with conversation history
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
   ];
 
-  // Add a marker if we have both a summary and recent messages
-  if (conversationSummary && conversationHistory.length > 0) {
-    messages.push({
-      role: "user",
-      content:
-        "[SYSTEM NOTE: The following are the most recent messages from this conversation - these are verbatim, not summarized.]",
-    });
-  }
+  // Only include last 10 messages (5 pairs) for context - enough for resolving "that", "it", etc.
+  const recentHistory = conversationHistory.slice(-10);
 
-  // Add conversation history formatted as JSON to clearly separate metadata from content
-  for (const msg of conversationHistory) {
+  // Add conversation history formatted as JSON
+  for (const msg of recentHistory) {
     const contextEntry = {
       timestamp: formatTimestamp(msg.timestamp),
       role: msg.role,
@@ -555,7 +544,7 @@ export async function generateEndOfDayMessage(
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Generate a gentle end-of-day message. Ask if there's anything the user wants to remember for tomorrow - a thought, a task, anything on their mind. Also wish them a good night. Keep it warm and cozy, like a soft send-off before sleep. Keep it to 2-3 sentences. Vary your wording to keep it fresh.`;
+Generate a gentle end-of-day message. Ask if there's anything the user wants to remember for tomorrow - a thought, a task, anything on their mind. Keep it warm and cozy. Keep it to 2-3 sentences. Vary your wording to keep it fresh.`;
 
   const taskPrompt = "Generate an end-of-day message.";
 
@@ -650,6 +639,7 @@ export type ActionContext =
       reminders: { task: string; timeStr: string; isImportant: boolean }[];
     }
   | { type: "brain_dump_saved"; content: string }
+  | { type: "inbox_item_added"; item: string; inboxCount: number }
   | { type: "task_completed"; task: string }
   | { type: "task_cancelled"; task: string }
   | { type: "multiple_tasks_cancelled"; tasks: string[] }
@@ -721,6 +711,9 @@ export async function generateActionResponse(
       break;
     case "brain_dump_saved":
       prompt = `The user just captured a thought/brain dump: "${actionContext.content}". Acknowledge that it's been saved and they'll see it in their daily summary. Keep it very brief.`;
+      break;
+    case "inbox_item_added":
+      prompt = `The user mentioned something they need to do: "${actionContext.item}". It's been added to their Inbox (${actionContext.inboxCount} item${actionContext.inboxCount === 1 ? "" : "s"} total). Acknowledge very briefly - just confirm it's in the inbox.`;
       break;
     case "task_completed":
       prompt = `The user just marked "${actionContext.task}" as done. Give them a calm, proportional acknowledgment.`;
@@ -827,6 +820,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Set ${actionContext.reminders.length} reminders for you.`;
       case "brain_dump_saved":
         return `Captured that thought.`;
+      case "inbox_item_added":
+        return `Added to your inbox.`;
       case "task_completed":
         return `Marked ${actionContext.task} as done.`;
       case "task_cancelled":
