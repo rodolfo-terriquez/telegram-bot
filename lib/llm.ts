@@ -797,11 +797,9 @@ export async function generateActionResponse(
       prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally.`;
       break;
     case "conversation":
-      prompt = `The user said: "${actionContext.message}". Respond naturally as Tama - be warm, conversational, and helpful. If they seem to be asking for help or are confused, gently explain what you can do (reminders, brain dumps, lists, etc).`;
+      prompt = "Respond naturally to the user.";
       break;
-    case "conversation":
-        return `Hey there! I can help with reminders, hold onto thoughts, or keep track of lists. What would you like to do?`;
-      case "task_completed_with_list":
+    case "task_completed_with_list":
       prompt = `The user just completed "${actionContext.task}" which had a linked list "${actionContext.listName}". Both the task and list are now done. Give a calm acknowledgment.`;
       break;
   }
