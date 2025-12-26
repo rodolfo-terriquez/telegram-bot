@@ -238,9 +238,15 @@ async function handleIntent(
     case "delete_list":
       return await handleDeleteList(chatId, intent, context);
 
-    case "conversation":
-      await telegram.sendMessage(chatId, intent.response);
-      return intent.response;
+    case "conversation": {
+      const response = await generateActionResponse(
+        { type: "conversation", message: intent.message },
+        context,
+      );
+      await telegram.sendMessage(chatId, response);
+      return response;
+    }
+
 
     case "checkin_response":
       return await handleCheckinResponse(chatId, intent, context);

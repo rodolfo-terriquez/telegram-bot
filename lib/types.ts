@@ -112,7 +112,7 @@ export interface ListTasksIntent {
 
 export interface ConversationIntent {
   type: "conversation";
-  response: string;
+  message: string; // The user's message or topic to respond to
 }
 
 export interface CheckinResponseIntent {

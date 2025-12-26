@@ -289,7 +289,7 @@ Response formats:
 - delete_list: {"type": "delete_list", "listDescription": "optional fuzzy match"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
-- conversation: {"type": "conversation", "response": "your message to the user"}
+- conversation: {"type": "conversation", "message": "summary of what user said or wants to discuss"}
 
 Be lenient and understanding. ADHD users may send fragmented or unclear messages - try to understand their intent. Remember: you're sitting beside the user, not above them.`;
 
@@ -374,7 +374,7 @@ export async function parseIntent(
     // If parsing fails, return a conversation intent with error handling
     return {
       type: "conversation",
-      response:
+      message:
         "Hmm, I didn't quite catch that. Could you say it another way? I can help with reminders, hold onto thoughts for you, or mark things done.",
     };
   }
@@ -686,7 +686,8 @@ export type ActionContext =
       newName?: string;
     }
   | { type: "list_deleted"; name: string }
-  | { type: "task_completed_with_list"; task: string; listName: string };
+  | { type: "task_completed_with_list"; task: string; listName: string }
+  | { type: "conversation"; message: string };
 
 export async function generateActionResponse(
   actionContext: ActionContext,
@@ -795,7 +796,12 @@ export async function generateActionResponse(
     case "list_deleted":
       prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally.`;
       break;
-    case "task_completed_with_list":
+    case "conversation":
+      prompt = `The user said: "${actionContext.message}". Respond naturally as Tama - be warm, conversational, and helpful. If they seem to be asking for help or are confused, gently explain what you can do (reminders, brain dumps, lists, etc).`;
+      break;
+    case "conversation":
+        return `Hey there! I can help with reminders, hold onto thoughts, or keep track of lists. What would you like to do?`;
+      case "task_completed_with_list":
       prompt = `The user just completed "${actionContext.task}" which had a linked list "${actionContext.listName}". Both the task and list are now done. Give a calm acknowledgment.`;
       break;
   }
@@ -858,6 +864,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Updated your ${actionContext.name} list.`;
       case "list_deleted":
         return `Deleted the ${actionContext.name} list.`;
+      case "conversation":
+        return `Hey there! I can help with reminders, hold onto thoughts, or keep track of lists. What would you like to do?`;
       case "task_completed_with_list":
         return `Done with ${actionContext.task} and checked off the ${actionContext.listName} list.`;
     }
