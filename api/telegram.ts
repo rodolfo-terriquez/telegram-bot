@@ -198,10 +198,10 @@ async function handleIntent(
 ): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
-      return await handleReminder(chatId, intent, context);
+      return await handleReminders(chatId, [intent], context);
 
     case "multiple_reminders":
-      return await handleMultipleReminders(chatId, intent, context);
+      return await handleReminders(chatId, intent.reminders, context);
 
     case "brain_dump":
       return await handleBrainDump(chatId, intent, context);
@@ -252,71 +252,32 @@ async function handleIntent(
       return await handleCheckinResponse(chatId, intent, context);
 
     case "set_checkin_time":
-      return await handleSetCheckinTime(chatId, intent, context);
+      return await handleSetScheduleTime(
+        chatId,
+        "checkin",
+        intent.hour,
+        intent.minute,
+        context,
+      );
 
     case "set_morning_review_time":
-      return await handleSetMorningReviewTime(chatId, intent, context);
+      return await handleSetScheduleTime(
+        chatId,
+        "morning_review",
+        intent.hour,
+        intent.minute,
+        context,
+      );
   }
 }
 
-async function handleReminder(
+async function handleReminders(
   chatId: number,
-  intent: {
-    type: "reminder";
+  reminders: Array<{
     task: string;
     delayMinutes: number;
     isImportant: boolean;
-  },
-  context: ConversationContext,
-): Promise<string> {
-  // Create the task in Redis
-  const task = await redis.createTask(
-    chatId,
-    intent.task,
-    intent.isImportant,
-    intent.delayMinutes,
-  );
-
-  // Schedule the reminder via QStash
-  try {
-    console.log(
-      `Scheduling reminder for task ${task.id} in ${intent.delayMinutes} minutes`,
-    );
-    const messageId = await scheduleReminder(
-      chatId,
-      task.id,
-      intent.delayMinutes,
-      false,
-    );
-    console.log(`QStash message scheduled: ${messageId}`);
-
-    // Store the QStash message ID for potential cancellation
-    task.qstashMessageId = messageId;
-    await redis.updateTask(task);
-  } catch (error) {
-    console.error("Failed to schedule QStash reminder:", error);
-    // Still continue - task is saved, just won't get a push notification
-  }
-
-  // Format time for user
-  const timeStr = formatDelay(intent.delayMinutes);
-
-  const response = await generateActionResponse(
-    {
-      type: "reminder_created",
-      task: intent.task,
-      timeStr,
-      isImportant: intent.isImportant,
-    },
-    context,
-  );
-  await telegram.sendMessage(chatId, response);
-  return response;
-}
-
-async function handleMultipleReminders(
-  chatId: number,
-  intent: { type: "multiple_reminders"; reminders: ReminderItem[] },
+  }>,
   context: ConversationContext,
 ): Promise<string> {
   const createdTasks: {
@@ -325,7 +286,7 @@ async function handleMultipleReminders(
     isImportant: boolean;
   }[] = [];
 
-  for (const reminder of intent.reminders) {
+  for (const reminder of reminders) {
     // Create the task in Redis
     const task = await redis.createTask(
       chatId,
@@ -348,21 +309,28 @@ async function handleMultipleReminders(
       console.error("Failed to schedule QStash reminder:", error);
     }
 
-    const timeStr = formatDelay(reminder.delayMinutes);
     createdTasks.push({
       task: reminder.task,
-      timeStr,
+      timeStr: formatDelay(reminder.delayMinutes),
       isImportant: reminder.isImportant,
     });
   }
 
-  const response = await generateActionResponse(
-    {
-      type: "multiple_reminders_created",
-      reminders: createdTasks,
-    },
-    context,
-  );
+  // Use appropriate action context based on count
+  const actionContext =
+    createdTasks.length === 1
+      ? {
+          type: "reminder_created" as const,
+          task: createdTasks[0].task,
+          timeStr: createdTasks[0].timeStr,
+          isImportant: createdTasks[0].isImportant,
+        }
+      : {
+          type: "multiple_reminders_created" as const,
+          reminders: createdTasks,
+        };
+
+  const response = await generateActionResponse(actionContext, context);
   await telegram.sendMessage(chatId, response);
   return response;
 }
@@ -957,62 +925,88 @@ async function handleCheckinResponse(
   return response;
 }
 
-async function handleSetCheckinTime(
+type ScheduleType = "checkin" | "morning_review";
+
+async function handleSetScheduleTime(
   chatId: number,
-  intent: { type: "set_checkin_time"; hour: number; minute: number },
+  scheduleType: ScheduleType,
+  hour: number,
+  minute: number,
   context: ConversationContext,
 ): Promise<string> {
-  const { hour, minute } = intent;
-
-  // Get existing preferences to check for old schedule
+  // Get existing preferences to check for old schedules
   const existingPrefs = await redis.getUserPreferences(chatId);
 
-  // Delete old schedules if they exist
-  if (existingPrefs?.checkinScheduleId) {
-    await deleteSchedule(existingPrefs.checkinScheduleId);
-  }
-  if (existingPrefs?.weeklySummaryScheduleId) {
-    await deleteSchedule(existingPrefs.weeklySummaryScheduleId);
-  }
-
-  if (existingPrefs?.endOfDayScheduleId) {
-    await deleteSchedule(existingPrefs.endOfDayScheduleId);
-  }
-
-  // Create new cron expressions (minute hour * * *)
+  // Create cron expression (minute hour * * *)
   const cronExpression = `${minute} ${hour} * * *`;
-  const weeklyCron = `${minute} ${hour} * * 0`; // Same time on Sundays
-  const endOfDayCron = `0 0 * * *`; // Midnight
-
-  // Schedule new check-in, weekly summary, and end of day
-  // Wrap in try-catch to handle QStash errors gracefully
-  let checkinScheduleId: string | undefined;
-  let weeklySummaryScheduleId: string | undefined;
-  let endOfDayScheduleId: string | undefined;
 
   try {
-    checkinScheduleId = await scheduleDailyCheckin(chatId, cronExpression);
-    weeklySummaryScheduleId = await scheduleWeeklySummary(chatId, weeklyCron);
-    endOfDayScheduleId = await scheduleEndOfDay(chatId, endOfDayCron);
+    if (scheduleType === "checkin") {
+      // Delete old checkin-related schedules
+      if (existingPrefs?.checkinScheduleId) {
+        await deleteSchedule(existingPrefs.checkinScheduleId);
+      }
+      if (existingPrefs?.weeklySummaryScheduleId) {
+        await deleteSchedule(existingPrefs.weeklySummaryScheduleId);
+      }
+      if (existingPrefs?.endOfDayScheduleId) {
+        await deleteSchedule(existingPrefs.endOfDayScheduleId);
+      }
+
+      // Schedule new check-in, weekly summary, and end of day
+      const weeklyCron = `${minute} ${hour} * * 0`; // Same time on Sundays
+      const endOfDayCron = `0 0 * * *`; // Midnight
+
+      const checkinScheduleId = await scheduleDailyCheckin(
+        chatId,
+        cronExpression,
+      );
+      const weeklySummaryScheduleId = await scheduleWeeklySummary(
+        chatId,
+        weeklyCron,
+      );
+      const endOfDayScheduleId = await scheduleEndOfDay(chatId, endOfDayCron);
+
+      // Save preferences
+      const prefs = await redis.setCheckinTime(
+        chatId,
+        hour,
+        minute,
+        checkinScheduleId,
+      );
+      prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
+      prefs.endOfDayScheduleId = endOfDayScheduleId;
+      await redis.saveUserPreferences(prefs);
+    } else {
+      // morning_review
+      // Delete old morning review schedule
+      if (existingPrefs?.morningReviewScheduleId) {
+        await deleteSchedule(existingPrefs.morningReviewScheduleId);
+      }
+
+      // Schedule new morning review
+      const morningReviewScheduleId = await scheduleMorningReview(
+        chatId,
+        cronExpression,
+      );
+
+      // Update preferences
+      const prefs = existingPrefs || {
+        chatId,
+        checkinTime: "20:00",
+        morningReviewTime: "08:00",
+      };
+      prefs.morningReviewTime = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+      prefs.morningReviewScheduleId = morningReviewScheduleId;
+      await redis.saveUserPreferences(prefs);
+    }
   } catch (error) {
-    console.error("Failed to create schedules:", error);
-    // Send error message to user but don't crash
+    console.error(`Failed to create ${scheduleType} schedule:`, error);
     const errorResponse =
-      "I had trouble setting up the schedules. The time preference is saved, but notifications might not work. You can try again later.";
+      "I had trouble setting up the schedule. You can try again later.";
     await telegram.sendMessage(chatId, errorResponse);
     return errorResponse;
   }
-
-  // Save preferences with all schedule IDs
-  const prefs = await redis.setCheckinTime(
-    chatId,
-    hour,
-    minute,
-    checkinScheduleId,
-  );
-  prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
-  prefs.endOfDayScheduleId = endOfDayScheduleId;
-  await redis.saveUserPreferences(prefs);
 
   // Format time for display
   const period = hour >= 12 ? "PM" : "AM";
@@ -1020,70 +1014,12 @@ async function handleSetCheckinTime(
   const displayMinute = minute.toString().padStart(2, "0");
   const timeStr = `${displayHour}:${displayMinute} ${period}`;
 
-  const response = await generateActionResponse(
-    {
-      type: "checkin_time_set",
-      timeStr,
-    },
-    context,
-  );
-  await telegram.sendMessage(chatId, response);
-  return response;
-}
-
-async function handleSetMorningReviewTime(
-  chatId: number,
-  intent: { type: "set_morning_review_time"; hour: number; minute: number },
-  context: ConversationContext,
-): Promise<string> {
-  const { hour, minute } = intent;
-
-  // Get existing preferences to check for old schedule
-  const existingPrefs = await redis.getUserPreferences(chatId);
-
-  // Delete old morning review schedule if it exists
-  if (existingPrefs?.morningReviewScheduleId) {
-    await deleteSchedule(existingPrefs.morningReviewScheduleId);
-  }
-
-  // Create new cron expression (minute hour * * *)
-  const cronExpression = `${minute} ${hour} * * *`;
-
-  // Schedule new morning review
-  let morningReviewScheduleId: string | undefined;
-
-  try {
-    morningReviewScheduleId = await scheduleMorningReview(
-      chatId,
-      cronExpression,
-    );
-  } catch (error) {
-    console.error("Failed to create morning review schedule:", error);
-    const errorResponse =
-      "I had trouble setting up the morning review. You can try again later.";
-    await telegram.sendMessage(chatId, errorResponse);
-    return errorResponse;
-  }
-
-  // Update preferences with new morning review time and schedule ID
-  const prefs = existingPrefs || {
-    chatId,
-    checkinTime: "20:00",
-    morningReviewTime: "08:00",
-  };
-  prefs.morningReviewTime = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
-  prefs.morningReviewScheduleId = morningReviewScheduleId;
-  await redis.saveUserPreferences(prefs);
-
-  // Format time for display
-  const period = hour >= 12 ? "PM" : "AM";
-  const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
-  const displayMinute = minute.toString().padStart(2, "0");
-  const timeStr = `${displayHour}:${displayMinute} ${period}`;
+  const actionType =
+    scheduleType === "checkin" ? "checkin_time_set" : "morning_review_time_set";
 
   const response = await generateActionResponse(
     {
-      type: "morning_review_time_set",
+      type: actionType,
       timeStr,
     },
     context,
