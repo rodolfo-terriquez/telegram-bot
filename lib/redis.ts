@@ -681,16 +681,16 @@ export async function addToConversation(
     { role: "assistant", content: assistantResponse, timestamp: now },
   );
 
-  // Check if we need to summarize (at 20 message pairs = 40 messages)
+  // Check if we need to summarize (at 30 message pairs = 60 messages)
   const messagePairs = messages.length / 2;
 
   if (messagePairs >= MAX_CONVERSATION_PAIRS && summarizationCallback) {
-    // Get the oldest 15 pairs (30 messages) to summarize
+    // Get the oldest 20 pairs (40 messages) to summarize
     const messagesToSummarize = messages.slice(
       0,
       (MAX_CONVERSATION_PAIRS - RECENT_PAIRS_TO_KEEP) * 2,
     );
-    // Keep the newest 5 pairs (10 messages) verbatim
+    // Keep the newest 10 pairs (20 messages) verbatim
     const recentMessages = messages.slice(-(RECENT_PAIRS_TO_KEEP * 2));
 
     // Generate new summary (in background, don't block the response)
@@ -710,10 +710,10 @@ export async function addToConversation(
         console.error("Failed to generate conversation summary:", err);
       });
 
-    // For now, save without waiting for summarization
-    // (the next request will have the updated summary)
+    // Save immediately with trimmed messages (don't wait for summarization to complete)
+    // The summary will be updated by the background callback above
     const tempData: ConversationData = {
-      messages,
+      messages: recentMessages,
       summary,
       summaryUpdatedAt: conversationData.summaryUpdatedAt,
     };
