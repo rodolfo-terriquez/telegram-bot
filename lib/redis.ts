@@ -693,12 +693,22 @@ export async function addToConversation(
     // Keep the newest 10 pairs (20 messages) verbatim
     const recentMessages = messages.slice(-(RECENT_PAIRS_TO_KEEP * 2));
 
-    // Generate new summary (in background, don't block the response)
+    // Save immediately with trimmed messages (don't wait for summarization to complete)
+    const tempData: ConversationData = {
+      messages: recentMessages,
+      summary,
+      summaryUpdatedAt: conversationData.summaryUpdatedAt,
+    };
+    await redis.set(key, JSON.stringify(tempData), { ex: CONVERSATION_TTL });
+
+    // Generate new summary in background, then update ONLY the summary field
+    // We re-read current data to avoid overwriting messages added while summarizing
     summarizationCallback(messagesToSummarize, summary)
       .then(async (newSummary) => {
-        // Save the updated conversation with new summary and trimmed messages
+        // Re-read current conversation to preserve any messages added during summarization
+        const currentData = await getConversationData(chatId);
         const updatedData: ConversationData = {
-          messages: recentMessages,
+          messages: currentData.messages, // Keep current messages, not stale reference
           summary: newSummary,
           summaryUpdatedAt: Date.now(),
         };
@@ -709,15 +719,6 @@ export async function addToConversation(
       .catch((err) => {
         console.error("Failed to generate conversation summary:", err);
       });
-
-    // Save immediately with trimmed messages (don't wait for summarization to complete)
-    // The summary will be updated by the background callback above
-    const tempData: ConversationData = {
-      messages: recentMessages,
-      summary,
-      summaryUpdatedAt: conversationData.summaryUpdatedAt,
-    };
-    await redis.set(key, JSON.stringify(tempData), { ex: CONVERSATION_TTL });
   } else {
     // Normal save - just update messages
     const updatedData: ConversationData = {

@@ -19,14 +19,8 @@ const logger = initLogger({
 let openrouterClient: OpenAI | null = null;
 
 // Model to use - configurable via environment variable
-// Appends :nitro suffix to prioritize throughput (fastest providers)
 function getModel(): string {
-  const model = process.env.OPENROUTER_MODEL || "x-ai/grok-3-fast";
-  // Add :nitro suffix if not already present to prioritize throughput
-  if (model.includes(":nitro")) {
-    return model;
-  }
-  return `${model}:nitro`;
+  return process.env.OPENROUTER_MODEL || "x-ai/grok-3-fast";
 }
 
 function getClient(): OpenAI {
