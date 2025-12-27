@@ -236,7 +236,12 @@ Possible intents:
    - Extract hour (0-23) and minute (0-59)
    - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
 
-11. "reminder_with_list" - User wants a reminder AND is providing a list of items
+11. "set_morning_review_time" - User wants to change their morning review time
+   - Keywords: "set morning review", "change morning time", "morning review at", "morning reminder"
+   - Extract hour (0-23) and minute (0-59)
+   - Examples: "set my morning review to 7am" → hour: 7, minute: 0
+
+12. "reminder_with_list" - User wants a reminder AND is providing a list of items
     - Triggers when they mention multiple items to remember (shopping list, packing, errands, etc.)
     - Extract a general task description for the reminder
     - Extract or infer a list name from context (e.g., "groceries", "packing", "birthday gifts")
@@ -247,31 +252,31 @@ Possible intents:
       - "at 5pm remind me to pack laptop, charger, and notebook"
         -> task: "pack for trip", listName: "Packing", items: ["laptop", "charger", "notebook"]
 
-12. "create_list" - User wants to create a standalone list without a reminder
+13. "create_list" - User wants to create a standalone list without a reminder
     - Keywords: "make a list", "create a list", "start a list", "list for me"
     - No time/reminder component
     - Examples:
       - "make a list of birthday gifts - tv for mom, switch for brother"
       - "I'm thinking about movies to watch: inception, interstellar, tenet"
 
-13. "show_lists" - User wants to see all their lists
+14. "show_lists" - User wants to see all their lists
     - Keywords: "show lists", "my lists", "what lists", "all lists"
 
-14. "show_list" - User wants to see a specific list
+15. "show_list" - User wants to see a specific list
     - Keywords: "show the grocery list", "what's on my packing list", "check my inbox"
     - Include listDescription for fuzzy matching (use "Inbox" when the user asks about their inbox)
 
-15. "modify_list" - User wants to change an existing list
+16. "modify_list" - User wants to change an existing list
     - Add items: "add milk to my grocery list"
     - Remove items: "remove bread from shopping list"
     - Check items: "check off eggs", "got the bread"
     - Uncheck items: "uncheck milk"
     - Rename: "rename grocery list to shopping"
 
-16. "delete_list" - User wants to delete a list
+17. "delete_list" - User wants to delete a list
     - Keywords: "delete the list", "remove my list", "get rid of list"
 
-17. "conversation" - General chat or unclear intent
+18. "conversation" - General chat or unclear intent
    - Generate a brief, warm response
    - If unclear, gently ask what they need help with
 
@@ -292,6 +297,7 @@ Response formats:
 - delete_list: {"type": "delete_list", "listDescription": "optional fuzzy match"}
 - checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
 - set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
+- set_morning_review_time: {"type": "set_morning_review_time", "hour": number, "minute": number}
 - conversation: {"type": "conversation", "message": "the user's exact message verbatim"}
 
 Be lenient and understanding. ADHD users may send fragmented or unclear messages - try to understand their intent. Remember: you're sitting beside the user, not above them.`;
@@ -565,6 +571,74 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
   return content;
 }
 
+export interface MorningReviewData {
+  inboxItems: { content: string }[];
+  overdueTasks: { content: string; overdueTime: string }[];
+}
+
+export async function generateMorningReviewMessage(
+  data: MorningReviewData,
+  context?: ConversationContext,
+): Promise<string> {
+  const client = getClient();
+
+  const hasInbox = data.inboxItems.length > 0;
+  const hasOverdue = data.overdueTasks.length > 0;
+
+  // Build the data section for the prompt
+  let dataSection = "";
+
+  if (hasInbox) {
+    const inboxList = data.inboxItems.map((i) => `- ${i.content}`).join("\n");
+    dataSection += `Inbox items (${data.inboxItems.length}):\n${inboxList}\n\n`;
+  }
+
+  if (hasOverdue) {
+    const overdueList = data.overdueTasks
+      .map((t) => `- ${t.content} (${t.overdueTime})`)
+      .join("\n");
+    dataSection += `Overdue reminders (${data.overdueTasks.length}):\n${overdueList}`;
+  }
+
+  const systemPrompt = `${TAMA_PERSONALITY}
+
+Generate a gentle morning review message. This is a daily invitation for the user to look at their inbox items and overdue reminders. The goal is to help them:
+- Maybe schedule some inbox items (turn them into reminders with specific times)
+- Decide what to do with overdue items: reschedule them, mark them done, or drop them entirely
+
+Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as "in case you want to" or "whenever you're ready." List the items clearly so they can see what's there. Dropping items is always a valid choice. Keep your intro/outro brief, but do show the full lists.`;
+
+  const taskPrompt =
+    hasInbox || hasOverdue
+      ? `Generate a morning review message with the following items:\n\n${dataSection}`
+      : "Generate a brief morning greeting. There are no inbox items or overdue tasks right now.";
+
+  const response = await client.chat.completions.create({
+    model: getModel(),
+    max_tokens: 400,
+    messages: buildContextMessages(systemPrompt, taskPrompt, context),
+  });
+
+  const content = response.choices[0]?.message?.content;
+  if (!content) {
+    // Fallback message
+    if (!hasInbox && !hasOverdue) {
+      return "Morning. Your inbox is clear and nothing's overdue. Fresh start today.";
+    }
+    let fallback = "Morning. Here's what's floating around:\n\n";
+    if (hasInbox) {
+      fallback += `Inbox:\n${data.inboxItems.map((i) => `- ${i.content}`).join("\n")}\n\n`;
+    }
+    if (hasOverdue) {
+      fallback += `Overdue:\n${data.overdueTasks.map((t) => `- ${t.content}`).join("\n")}\n\n`;
+    }
+    fallback += "No pressure, just here if you want to sort through any of it.";
+    return fallback;
+  }
+
+  return content;
+}
+
 export async function generateWeeklyInsights(
   checkIns: CheckIn[],
   dumps: BrainDump[],
@@ -654,6 +728,7 @@ export type ActionContext =
   | { type: "task_not_found"; action: "done" | "cancel" }
   | { type: "checkin_logged"; rating: number; hasNotes: boolean }
   | { type: "checkin_time_set"; timeStr: string }
+  | { type: "morning_review_time_set"; timeStr: string }
   | {
       type: "reminder_with_list_created";
       task: string;
@@ -749,6 +824,9 @@ export async function generateActionResponse(
       break;
     case "checkin_time_set":
       prompt = `The user just set their daily check-in time to ${actionContext.timeStr}. They'll also get a daily summary and weekly summary on Sundays at this time. Confirm this briefly.`;
+      break;
+    case "morning_review_time_set":
+      prompt = `The user just set their morning review time to ${actionContext.timeStr}. This is when they'll get a daily summary of their inbox items and any overdue tasks. Confirm this briefly.`;
       break;
     case "reminder_with_list_created":
       prompt = `The user just set a reminder for "${actionContext.task}" in ${actionContext.timeStr}, with a linked list called "${actionContext.listName}" containing ${actionContext.itemCount} items.${actionContext.isImportant ? " They marked it as important." : ""} Acknowledge warmly - mention both the reminder and that you're keeping track of the list items.`;
@@ -847,6 +925,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Logged your check-in: ${actionContext.rating}/5.`;
       case "checkin_time_set":
         return `Check-in time set to ${actionContext.timeStr}.`;
+      case "morning_review_time_set":
+        return `Morning review time set to ${actionContext.timeStr}.`;
       case "reminder_with_list_created":
         return `Got it, I'll remind you about ${actionContext.task} in ${actionContext.timeStr}. Keeping track of ${actionContext.itemCount} items on your ${actionContext.listName} list.`;
       case "list_created":

@@ -143,6 +143,31 @@ export async function scheduleEndOfDay(
   return schedule.scheduleId;
 }
 
+export async function scheduleMorningReview(
+  chatId: number,
+  cronExpression: string = "0 8 * * *", // 8 AM daily by default
+): Promise<string> {
+  const client = getClient();
+  const notifyUrl = getNotifyUrl();
+
+  const payload: NotificationPayload = {
+    chatId,
+    taskId: "",
+    type: "morning_review",
+  };
+
+  const schedule = await client.schedules.create({
+    destination: notifyUrl,
+    cron: withTimezone(cronExpression),
+    body: JSON.stringify(payload),
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+
+  return schedule.scheduleId;
+}
+
 export async function scheduleFollowUp(
   chatId: number,
   taskId: string,

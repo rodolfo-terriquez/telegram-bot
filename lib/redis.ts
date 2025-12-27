@@ -193,6 +193,13 @@ export async function findTasksByDescriptions(
   return matchedTasks;
 }
 
+export async function getOverdueTasks(chatId: number): Promise<Task[]> {
+  const tasks = await getPendingTasks(chatId);
+  const now = Date.now();
+
+  return tasks.filter((task) => task.nextReminder < now);
+}
+
 // List operations
 export async function createList(
   chatId: number,
@@ -258,6 +265,17 @@ export async function addToInbox(chatId: number, item: string): Promise<List> {
   await updateList(inbox);
 
   return inbox;
+}
+
+export async function getUncheckedInboxItems(
+  chatId: number,
+): Promise<ListItem[]> {
+  const lists = await getActiveLists(chatId);
+  const inbox = lists.find((l) => l.name === INBOX_NAME);
+
+  if (!inbox) return [];
+
+  return inbox.items.filter((item) => !item.isChecked);
 }
 
 export async function getList(
@@ -800,8 +818,11 @@ export async function setCheckinTime(
   const prefs: UserPreferences = {
     chatId,
     checkinTime: `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`,
+    morningReviewTime: existing?.morningReviewTime || "08:00",
     checkinScheduleId: scheduleId || existing?.checkinScheduleId,
     weeklySummaryScheduleId: existing?.weeklySummaryScheduleId,
+    endOfDayScheduleId: existing?.endOfDayScheduleId,
+    morningReviewScheduleId: existing?.morningReviewScheduleId,
   };
   await saveUserPreferences(prefs);
   return prefs;

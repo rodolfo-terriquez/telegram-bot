@@ -61,7 +61,8 @@ export type Intent =
   | DeleteListIntent
   | ConversationIntent
   | CheckinResponseIntent
-  | SetCheckinTimeIntent;
+  | SetCheckinTimeIntent
+  | SetMorningReviewTimeIntent;
 
 export interface ReminderIntent {
   type: "reminder";
@@ -123,6 +124,12 @@ export interface CheckinResponseIntent {
 
 export interface SetCheckinTimeIntent {
   type: "set_checkin_time";
+  hour: number;
+  minute: number;
+}
+
+export interface SetMorningReviewTimeIntent {
+  type: "set_morning_review_time";
   hour: number;
   minute: number;
 }
@@ -219,7 +226,8 @@ export interface NotificationPayload {
     | "daily_checkin"
     | "weekly_summary"
     | "follow_up"
-    | "end_of_day";
+    | "end_of_day"
+    | "morning_review";
 }
 
 // Daily check-in data
@@ -236,7 +244,9 @@ export interface CheckIn {
 export interface UserPreferences {
   chatId: number;
   checkinTime: string; // "HH:MM" format, default "20:00"
+  morningReviewTime: string; // "HH:MM" format, default "08:00"
   checkinScheduleId?: string;
   weeklySummaryScheduleId?: string;
   endOfDayScheduleId?: string;
+  morningReviewScheduleId?: string;
 }

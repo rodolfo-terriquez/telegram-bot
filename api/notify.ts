@@ -16,6 +16,7 @@ import {
   generateReminderMessage,
   generateFinalNagMessage,
   generateEndOfDayMessage,
+  generateMorningReviewMessage,
   ConversationContext,
 } from "../lib/llm.js";
 
@@ -77,6 +78,10 @@ export default async function handler(
 
       case "end_of_day":
         await handleEndOfDay(payload);
+        break;
+
+      case "morning_review":
+        await handleMorningReview(payload);
         break;
 
       default:
@@ -259,4 +264,54 @@ async function handleEndOfDay(payload: NotificationPayload): Promise<void> {
   const message = await generateEndOfDayMessage(context);
 
   await telegram.sendMessage(chatId, message);
+}
+
+async function handleMorningReview(
+  payload: NotificationPayload,
+): Promise<void> {
+  const { chatId } = payload;
+
+  // Get inbox items and overdue tasks
+  const [inboxItems, overdueTasks] = await Promise.all([
+    redis.getUncheckedInboxItems(chatId),
+    redis.getOverdueTasks(chatId),
+  ]);
+
+  // Get conversation context
+  const context = await getContext(chatId);
+
+  // Format overdue tasks with time info
+  const formattedOverdue = overdueTasks.map((task) => ({
+    content: task.content,
+    overdueTime: formatOverdueTime(task.nextReminder),
+  }));
+
+  // Generate the morning review message
+  const message = await generateMorningReviewMessage(
+    {
+      inboxItems: inboxItems.map((item) => ({ content: item.content })),
+      overdueTasks: formattedOverdue,
+    },
+    context,
+  );
+
+  await telegram.sendMessage(chatId, message);
+}
+
+function formatOverdueTime(timestamp: number): string {
+  const now = Date.now();
+  const elapsed = now - timestamp;
+  const minutes = Math.floor(elapsed / 60000);
+
+  if (minutes < 60) {
+    return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }

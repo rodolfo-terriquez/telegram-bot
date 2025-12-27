@@ -23,6 +23,7 @@ import {
   scheduleDailyCheckin,
   scheduleWeeklySummary,
   scheduleEndOfDay,
+  scheduleMorningReview,
   deleteSchedule,
   cancelScheduledMessage,
 } from "../lib/qstash.js";
@@ -247,12 +248,14 @@ async function handleIntent(
       return response;
     }
 
-
     case "checkin_response":
       return await handleCheckinResponse(chatId, intent, context);
 
     case "set_checkin_time":
       return await handleSetCheckinTime(chatId, intent, context);
+
+    case "set_morning_review_time":
+      return await handleSetMorningReviewTime(chatId, intent, context);
   }
 }
 
@@ -1028,6 +1031,67 @@ async function handleSetCheckinTime(
   return response;
 }
 
+async function handleSetMorningReviewTime(
+  chatId: number,
+  intent: { type: "set_morning_review_time"; hour: number; minute: number },
+  context: ConversationContext,
+): Promise<string> {
+  const { hour, minute } = intent;
+
+  // Get existing preferences to check for old schedule
+  const existingPrefs = await redis.getUserPreferences(chatId);
+
+  // Delete old morning review schedule if it exists
+  if (existingPrefs?.morningReviewScheduleId) {
+    await deleteSchedule(existingPrefs.morningReviewScheduleId);
+  }
+
+  // Create new cron expression (minute hour * * *)
+  const cronExpression = `${minute} ${hour} * * *`;
+
+  // Schedule new morning review
+  let morningReviewScheduleId: string | undefined;
+
+  try {
+    morningReviewScheduleId = await scheduleMorningReview(
+      chatId,
+      cronExpression,
+    );
+  } catch (error) {
+    console.error("Failed to create morning review schedule:", error);
+    const errorResponse =
+      "I had trouble setting up the morning review. You can try again later.";
+    await telegram.sendMessage(chatId, errorResponse);
+    return errorResponse;
+  }
+
+  // Update preferences with new morning review time and schedule ID
+  const prefs = existingPrefs || {
+    chatId,
+    checkinTime: "20:00",
+    morningReviewTime: "08:00",
+  };
+  prefs.morningReviewTime = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+  prefs.morningReviewScheduleId = morningReviewScheduleId;
+  await redis.saveUserPreferences(prefs);
+
+  // Format time for display
+  const period = hour >= 12 ? "PM" : "AM";
+  const displayHour = hour > 12 ? hour - 12 : hour === 0 ? 12 : hour;
+  const displayMinute = minute.toString().padStart(2, "0");
+  const timeStr = `${displayHour}:${displayMinute} ${period}`;
+
+  const response = await generateActionResponse(
+    {
+      type: "morning_review_time_set",
+      timeStr,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
 async function handleDebugCommand(chatId: number): Promise<void> {
   const conversationData = await redis.getConversationData(chatId);
   const { messages, summary, summaryUpdatedAt } = conversationData;
@@ -1171,35 +1235,43 @@ async function handleDebugCommand(chatId: number): Promise<void> {
 
 async function setupDefaultSchedules(chatId: number): Promise<void> {
   // Default check-in time: 8 PM (20:00)
-  const defaultHour = 20;
-  const defaultMinute = 0;
+  const defaultCheckinHour = 20;
+  const defaultCheckinMinute = 0;
+
+  // Default morning review time: 8 AM (08:00)
+  const defaultMorningHour = 8;
+  const defaultMorningMinute = 0;
 
   try {
     // Create cron expressions
-    const cronExpression = `${defaultMinute} ${defaultHour} * * *`;
-    const weeklyCron = `${defaultMinute} ${defaultHour} * * 0`; // Sundays
+    const checkinCron = `${defaultCheckinMinute} ${defaultCheckinHour} * * *`;
+    const weeklyCron = `${defaultCheckinMinute} ${defaultCheckinHour} * * 0`; // Sundays
     const endOfDayCron = `0 0 * * *`; // Midnight
+    const morningReviewCron = `${defaultMorningMinute} ${defaultMorningHour} * * *`; // 8 AM daily
 
     // Schedule all recurring notifications
-    const checkinScheduleId = await scheduleDailyCheckin(
-      chatId,
-      cronExpression,
-    );
+    const checkinScheduleId = await scheduleDailyCheckin(chatId, checkinCron);
     const weeklySummaryScheduleId = await scheduleWeeklySummary(
       chatId,
       weeklyCron,
     );
     const endOfDayScheduleId = await scheduleEndOfDay(chatId, endOfDayCron);
+    const morningReviewScheduleId = await scheduleMorningReview(
+      chatId,
+      morningReviewCron,
+    );
 
     // Save preferences
     const prefs = await redis.setCheckinTime(
       chatId,
-      defaultHour,
-      defaultMinute,
+      defaultCheckinHour,
+      defaultCheckinMinute,
       checkinScheduleId,
     );
     prefs.weeklySummaryScheduleId = weeklySummaryScheduleId;
     prefs.endOfDayScheduleId = endOfDayScheduleId;
+    prefs.morningReviewTime = `${defaultMorningHour.toString().padStart(2, "0")}:${defaultMorningMinute.toString().padStart(2, "0")}`;
+    prefs.morningReviewScheduleId = morningReviewScheduleId;
     await redis.saveUserPreferences(prefs);
 
     console.log(`Set up default schedules for new user ${chatId}`);
