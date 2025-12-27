@@ -186,15 +186,27 @@ export default async function handler(
       );
     } else {
       // Process intents sequentially (or single intent)
+      // Use skipSend for multiple intents to combine into one message
+      const shouldSkipSend = intents.length > 1;
       const responses: string[] = [];
       for (const intent of intents) {
         console.log(`[${chatId}] Handling intent: ${intent.type}`);
-        const intentResponse = await handleIntent(chatId, intent, context);
+        const intentResponse = await handleIntent(
+          chatId,
+          intent,
+          context,
+          shouldSkipSend,
+        );
         if (intentResponse) {
           responses.push(intentResponse);
         }
       }
       response = responses.length > 0 ? responses.join("\n\n") : null;
+
+      // Send combined response for multiple intents
+      if (shouldSkipSend && response) {
+        await telegram.sendMessage(chatId, response);
+      }
     }
     console.log(
       `[${chatId}] Intent(s) handled, response length: ${response?.length ?? 0}`,
@@ -237,61 +249,66 @@ async function handleIntent(
   chatId: number,
   intent: Intent,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string | null> {
   switch (intent.type) {
     case "reminder":
-      return await handleReminders(chatId, [intent], context);
+      return await handleReminders(chatId, [intent], context, skipSend);
 
     case "multiple_reminders":
-      return await handleReminders(chatId, intent.reminders, context);
+      return await handleReminders(chatId, intent.reminders, context, skipSend);
 
     case "brain_dump":
-      return await handleBrainDump(chatId, intent, context);
+      return await handleBrainDump(chatId, intent, context, skipSend);
 
     case "inbox":
-      return await handleInbox(chatId, intent, context);
+      return await handleInbox(chatId, intent, context, skipSend);
 
     case "mark_done":
-      return await handleMarkDone(chatId, intent, context);
+      return await handleMarkDone(chatId, intent, context, skipSend);
 
     case "cancel_task":
-      return await handleCancelTask(chatId, intent, context);
+      return await handleCancelTask(chatId, intent, context, skipSend);
 
     case "cancel_multiple_tasks":
-      return await handleCancelMultipleTasks(chatId, intent, context);
+      return await handleCancelMultipleTasks(chatId, intent, context, skipSend);
 
     case "list_tasks":
-      return await handleListTasks(chatId, context);
+      return await handleListTasks(chatId, context, skipSend);
 
     case "reminder_with_list":
-      return await handleReminderWithList(chatId, intent, context);
+      return await handleReminderWithList(chatId, intent, context, skipSend);
 
     case "create_list":
-      return await handleCreateList(chatId, intent, context);
+      return await handleCreateList(chatId, intent, context, skipSend);
 
     case "show_lists":
-      return await handleShowLists(chatId, context);
+      return await handleShowLists(chatId, context, skipSend);
 
     case "show_list":
-      return await handleShowList(chatId, intent, context);
+      return await handleShowList(chatId, intent, context, skipSend);
 
     case "modify_list":
-      return await handleModifyList(chatId, intent, context);
+      return await handleModifyList(chatId, intent, context, skipSend);
 
     case "delete_list":
-      return await handleDeleteList(chatId, intent, context);
+      return await handleDeleteList(chatId, intent, context, skipSend);
 
     case "conversation": {
       const response = await generateActionResponse(
         { type: "conversation", message: intent.message },
         context,
       );
-      await telegram.sendMessage(chatId, response);
+      if (!skipSend) {
+        if (!skipSend) {
+          await telegram.sendMessage(chatId, response);
+        }
+      }
       return response;
     }
 
     case "checkin_response":
-      return await handleCheckinResponse(chatId, intent, context);
+      return await handleCheckinResponse(chatId, intent, context, skipSend);
 
     case "set_checkin_time":
       return await handleSetScheduleTime(
@@ -300,6 +317,7 @@ async function handleIntent(
         intent.hour,
         intent.minute,
         context,
+        skipSend,
       );
 
     case "set_morning_review_time":
@@ -309,6 +327,7 @@ async function handleIntent(
         intent.hour,
         intent.minute,
         context,
+        skipSend,
       );
   }
 }
@@ -321,6 +340,7 @@ async function handleReminders(
     isImportant: boolean;
   }>,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const createdTasks: {
     task: string;
@@ -373,7 +393,11 @@ async function handleReminders(
         };
 
   const response = await generateActionResponse(actionContext, context);
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
+  }
   return response;
 }
 
@@ -381,6 +405,7 @@ async function handleBrainDump(
   chatId: number,
   intent: { type: "brain_dump"; content: string },
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   await redis.createBrainDump(chatId, intent.content);
 
@@ -391,7 +416,11 @@ async function handleBrainDump(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
+  }
   return response;
 }
 
@@ -399,6 +428,7 @@ async function handleInbox(
   chatId: number,
   intent: { type: "inbox"; item: string },
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const inbox = await redis.addToInbox(chatId, intent.item);
 
@@ -410,7 +440,11 @@ async function handleInbox(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
+  }
   return response;
 }
 
@@ -418,6 +452,7 @@ async function handleMarkDone(
   chatId: number,
   intent: { type: "mark_done"; taskDescription?: string },
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   // Find the task
   const task = await redis.findTaskByDescription(
@@ -433,7 +468,9 @@ async function handleMarkDone(
       },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -464,7 +501,9 @@ async function handleMarkDone(
       },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -475,7 +514,9 @@ async function handleMarkDone(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -483,6 +524,7 @@ async function handleCancelTask(
   chatId: number,
   intent: { type: "cancel_task"; taskDescription?: string },
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   // Find the task
   const task = await redis.findTaskByDescription(
@@ -498,7 +540,9 @@ async function handleCancelTask(
       },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -526,7 +570,9 @@ async function handleCancelTask(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -534,6 +580,7 @@ async function handleCancelMultipleTasks(
   chatId: number,
   intent: { type: "cancel_multiple_tasks"; taskDescriptions: string[] },
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const tasks = await redis.findTasksByDescriptions(
     chatId,
@@ -548,7 +595,9 @@ async function handleCancelMultipleTasks(
       },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -572,13 +621,16 @@ async function handleCancelMultipleTasks(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
 async function handleListTasks(
   chatId: number,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const tasks = await redis.getPendingTasks(chatId);
 
@@ -587,7 +639,9 @@ async function handleListTasks(
       { type: "no_tasks" },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -604,7 +658,9 @@ async function handleListTasks(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -612,6 +668,7 @@ async function handleReminderWithList(
   chatId: number,
   intent: ReminderWithListIntent,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   // Create the list first
   const list = await redis.createList(chatId, intent.listName, intent.items);
@@ -659,7 +716,9 @@ async function handleReminderWithList(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -667,6 +726,7 @@ async function handleCreateList(
   chatId: number,
   intent: CreateListIntent,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const list = await redis.createList(chatId, intent.name, intent.items);
 
@@ -678,13 +738,16 @@ async function handleCreateList(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
 async function handleShowLists(
   chatId: number,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const lists = await redis.getActiveLists(chatId);
 
@@ -693,7 +756,9 @@ async function handleShowLists(
       { type: "no_lists" },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -711,7 +776,9 @@ async function handleShowLists(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -719,6 +786,7 @@ async function handleShowList(
   chatId: number,
   intent: ShowListIntent,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const list = await redis.findListByDescription(
     chatId,
@@ -730,7 +798,9 @@ async function handleShowList(
       { type: "list_not_found" },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -758,7 +828,9 @@ async function handleShowList(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -950,6 +1022,7 @@ async function handleModifyList(
   chatId: number,
   intent: ModifyListIntent,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const list = await redis.findListByDescription(
     chatId,
@@ -961,7 +1034,9 @@ async function handleModifyList(
       { type: "list_not_found" },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -1029,7 +1104,9 @@ async function handleModifyList(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -1037,6 +1114,7 @@ async function handleDeleteList(
   chatId: number,
   intent: DeleteListIntent,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   const list = await redis.findListByDescription(
     chatId,
@@ -1048,7 +1126,9 @@ async function handleDeleteList(
       { type: "list_not_found" },
       context,
     );
-    await telegram.sendMessage(chatId, response);
+    if (!skipSend) {
+      await telegram.sendMessage(chatId, response);
+    }
     return response;
   }
 
@@ -1070,7 +1150,9 @@ async function handleDeleteList(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -1132,6 +1214,7 @@ async function handleCheckinResponse(
   chatId: number,
   intent: { type: "checkin_response"; rating: number; notes?: string },
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   // Save the check-in
   await redis.saveCheckIn(chatId, intent.rating, intent.notes);
@@ -1147,7 +1230,9 @@ async function handleCheckinResponse(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
@@ -1159,6 +1244,7 @@ async function handleSetScheduleTime(
   hour: number,
   minute: number,
   context: ConversationContext,
+  skipSend: boolean = false,
 ): Promise<string> {
   // Get existing preferences to check for old schedules
   const existingPrefs = await redis.getUserPreferences(chatId);
@@ -1250,7 +1336,9 @@ async function handleSetScheduleTime(
     },
     context,
   );
-  await telegram.sendMessage(chatId, response);
+  if (!skipSend) {
+    await telegram.sendMessage(chatId, response);
+  }
   return response;
 }
 
