@@ -793,6 +793,14 @@ export type ActionContext =
         items: { content: string; isChecked: boolean }[];
       }>;
     }
+  | {
+      type: "multiple_lists_modified";
+      modifications: Array<{
+        listName: string;
+        action: "add_items" | "remove_items" | "check_items" | "uncheck_items";
+        items: string[];
+      }>;
+    }
   | { type: "conversation"; message: string };
 
 export async function generateActionResponse(
@@ -914,6 +922,22 @@ export async function generateActionResponse(
       }
       break;
     }
+    case "multiple_lists_modified": {
+      const actionDescriptions: Record<string, string> = {
+        add_items: "added",
+        remove_items: "removed",
+        check_items: "checked off",
+        uncheck_items: "unchecked",
+      };
+      const modificationsSummary = actionContext.modifications
+        .map(
+          (m) =>
+            `${actionDescriptions[m.action]} ${m.items.join(", ")} from "${m.listName}"`,
+        )
+        .join("; ");
+      prompt = `Made multiple list changes: ${modificationsSummary}. Acknowledge briefly in one response.`;
+      break;
+    }
     case "list_deleted":
       prompt = `The user deleted the "${actionContext.name}" list. Acknowledge neutrally.`;
       break;
@@ -990,6 +1014,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Couldn't find that list. Say "show my lists" to see what's available.`;
       case "list_modified":
         return `Updated your ${actionContext.name} list.`;
+      case "multiple_lists_modified":
+        return `Updated ${actionContext.modifications.length} lists.`;
       case "list_deleted":
         return `Deleted the ${actionContext.name} list.`;
       case "conversation":

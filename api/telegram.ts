@@ -171,6 +171,19 @@ export default async function handler(
         intents as ShowListIntent[],
         context,
       );
+    } else if (
+      intents.length > 1 &&
+      intents.every((i) => i.type === "modify_list")
+    ) {
+      // Batch modify_list intents
+      console.log(
+        `[${chatId}] Handling batch of ${intents.length} modify_list intents`,
+      );
+      response = await handleModifyMultipleLists(
+        chatId,
+        intents as ModifyListIntent[],
+        context,
+      );
     } else {
       // Process intents sequentially (or single intent)
       const responses: string[] = [];
@@ -804,6 +817,128 @@ async function handleShowMultipleLists(
     {
       type: "multiple_lists_shown",
       lists: listsData,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleModifyMultipleLists(
+  chatId: number,
+  intents: ModifyListIntent[],
+  context: ConversationContext,
+): Promise<string> {
+  const modifications: Array<{
+    listName: string;
+    action: "add_items" | "remove_items" | "check_items" | "uncheck_items";
+    items: string[];
+  }> = [];
+
+  for (const intent of intents) {
+    const list = await redis.findListByDescription(
+      chatId,
+      intent.listDescription,
+    );
+
+    if (!list) {
+      continue; // Skip lists that weren't found
+    }
+
+    let modifiedItems: string[] = [];
+
+    switch (intent.action) {
+      case "add_items":
+        if (intent.items && intent.items.length > 0) {
+          await redis.addListItems(chatId, list.id, intent.items);
+          modifiedItems = intent.items;
+        }
+        break;
+      case "remove_items":
+        if (intent.items && intent.items.length > 0) {
+          const result = await redis.removeListItems(
+            chatId,
+            list.id,
+            intent.items,
+          );
+          if (result) {
+            modifiedItems = result.removedItems;
+          }
+        }
+        break;
+      case "check_items":
+        if (intent.items && intent.items.length > 0) {
+          const result = await redis.checkListItems(
+            chatId,
+            list.id,
+            intent.items,
+            true,
+          );
+          if (result) {
+            modifiedItems = result.modifiedItems;
+          }
+        }
+        break;
+      case "uncheck_items":
+        if (intent.items && intent.items.length > 0) {
+          const result = await redis.checkListItems(
+            chatId,
+            list.id,
+            intent.items,
+            false,
+          );
+          if (result) {
+            modifiedItems = result.modifiedItems;
+          }
+        }
+        break;
+      case "rename":
+        // Rename doesn't fit the batch pattern well, handle separately
+        if (intent.newName) {
+          await redis.renameList(chatId, list.id, intent.newName);
+        }
+        continue;
+    }
+
+    if (modifiedItems.length > 0) {
+      modifications.push({
+        listName: list.name,
+        action: intent.action,
+        items: modifiedItems,
+      });
+    }
+  }
+
+  if (modifications.length === 0) {
+    const response = await generateActionResponse(
+      { type: "list_not_found" },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // If only one modification, use single list response
+  if (modifications.length === 1) {
+    const mod = modifications[0];
+    const response = await generateActionResponse(
+      {
+        type: "list_modified",
+        name: mod.listName,
+        action: mod.action,
+        items: mod.items,
+      },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // Multiple modifications - use combined response
+  const response = await generateActionResponse(
+    {
+      type: "multiple_lists_modified",
+      modifications,
     },
     context,
   );
