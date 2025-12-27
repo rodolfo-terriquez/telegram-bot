@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import type {
   TelegramUpdate,
   Intent,
+  ParsedIntents,
   ReminderItem,
   ReminderWithListIntent,
   CreateListIntent,
@@ -139,7 +140,7 @@ export default async function handler(
     ]);
 
     // Parse intent using Claude (with recent conversation for context)
-    const intent = await parseIntent(
+    const parsedResult = await parseIntent(
       userText,
       conversationData.messages,
       isAwaitingCheckin,
@@ -151,11 +152,39 @@ export default async function handler(
       summary: conversationData.summary,
     };
 
-    // Handle the intent
-    console.log(`[${chatId}] Handling intent: ${intent.type}`);
-    const response = await handleIntent(chatId, intent, context);
+    // Normalize to array for consistent handling
+    const intents: Intent[] = Array.isArray(parsedResult)
+      ? parsedResult
+      : [parsedResult];
+
+    // Handle the intent(s)
+    let response: string | null = null;
+
+    // Check for batch handling of same-type intents
+    if (intents.length > 1 && intents.every((i) => i.type === "show_list")) {
+      // Batch show_list intents
+      console.log(
+        `[${chatId}] Handling batch of ${intents.length} show_list intents`,
+      );
+      response = await handleShowMultipleLists(
+        chatId,
+        intents as ShowListIntent[],
+        context,
+      );
+    } else {
+      // Process intents sequentially (or single intent)
+      const responses: string[] = [];
+      for (const intent of intents) {
+        console.log(`[${chatId}] Handling intent: ${intent.type}`);
+        const intentResponse = await handleIntent(chatId, intent, context);
+        if (intentResponse) {
+          responses.push(intentResponse);
+        }
+      }
+      response = responses.length > 0 ? responses.join("\n\n") : null;
+    }
     console.log(
-      `[${chatId}] Intent handled, response length: ${response?.length ?? 0}`,
+      `[${chatId}] Intent(s) handled, response length: ${response?.length ?? 0}`,
     );
 
     // Save to conversation history
@@ -713,6 +742,68 @@ async function handleShowList(
       })),
       linkedTaskContent,
       linkedTaskTimeStr,
+    },
+    context,
+  );
+  await telegram.sendMessage(chatId, response);
+  return response;
+}
+
+async function handleShowMultipleLists(
+  chatId: number,
+  intents: ShowListIntent[],
+  context: ConversationContext,
+): Promise<string> {
+  const listsData: Array<{
+    name: string;
+    items: { content: string; isChecked: boolean }[];
+  }> = [];
+
+  for (const intent of intents) {
+    const list = await redis.findListByDescription(
+      chatId,
+      intent.listDescription,
+    );
+
+    if (list) {
+      listsData.push({
+        name: list.name,
+        items: list.items.map((i) => ({
+          content: i.content,
+          isChecked: i.isChecked,
+        })),
+      });
+    }
+  }
+
+  if (listsData.length === 0) {
+    const response = await generateActionResponse(
+      { type: "no_lists" },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // If only one list found, use single list response
+  if (listsData.length === 1) {
+    const response = await generateActionResponse(
+      {
+        type: "list_shown",
+        name: listsData[0].name,
+        items: listsData[0].items,
+      },
+      context,
+    );
+    await telegram.sendMessage(chatId, response);
+    return response;
+  }
+
+  // Multiple lists - use combined response
+  const response = await generateActionResponse(
+    {
+      type: "multiple_lists_shown",
+      lists: listsData,
     },
     context,
   );

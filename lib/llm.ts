@@ -1,7 +1,13 @@
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { initLogger, wrapOpenAI } from "braintrust";
-import type { Intent, Task, BrainDump, CheckIn } from "./types.js";
+import type {
+  Intent,
+  ParsedIntents,
+  Task,
+  BrainDump,
+  CheckIn,
+} from "./types.js";
 import type { ConversationMessage } from "./redis.js";
 
 // Initialize Braintrust logger for tracing
@@ -300,13 +306,21 @@ Response formats:
 - set_morning_review_time: {"type": "set_morning_review_time", "hour": number, "minute": number}
 - conversation: {"type": "conversation", "message": "the user's exact message verbatim"}
 
+MULTIPLE INTENTS:
+If the user's request requires multiple actions of the SAME type, return an array of intents instead of a single object.
+- Example: "show me the contents of all my lists" when user has 3 lists → return array of show_list intents:
+  [{"type": "show_list", "listDescription": "Inbox"}, {"type": "show_list", "listDescription": "Groceries"}, {"type": "show_list", "listDescription": "Ideas"}]
+- Example: "cancel the groceries and laundry reminders" → use cancel_multiple_tasks (NOT an array)
+- Only use arrays for show_list when user wants to see contents of multiple/all lists
+- For most requests, return a single JSON object as usual
+
 Be lenient and understanding. ADHD users may send fragmented or unclear messages - try to understand their intent. Remember: you're sitting beside the user, not above them.`;
 
 export async function parseIntent(
   userMessage: string,
   conversationHistory: ConversationMessage[] = [],
   isAwaitingCheckin: boolean = false,
-): Promise<Intent> {
+): Promise<ParsedIntents> {
   const client = getClient();
 
   // Build system prompt with current timestamp (no personality needed for JSON parsing)
@@ -370,14 +384,21 @@ export async function parseIntent(
         .replace(/\n?```$/, "");
     }
 
-    // Try to find JSON object in the response
-    const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      jsonText = jsonMatch[0];
+    // Try to find JSON array first (for multiple intents), then object
+    const jsonArrayMatch = jsonText.match(/\[[\s\S]*\]/);
+    const jsonObjectMatch = jsonText.match(/\{[\s\S]*\}/);
+
+    if (jsonArrayMatch) {
+      // Multiple intents returned as array
+      const intents = JSON.parse(jsonArrayMatch[0]) as Intent[];
+      return intents;
+    } else if (jsonObjectMatch) {
+      // Single intent returned as object
+      const intent = JSON.parse(jsonObjectMatch[0]) as Intent;
+      return intent;
     }
 
-    const intent = JSON.parse(jsonText) as Intent;
-    return intent;
+    throw new Error("No valid JSON found in response");
   } catch (error) {
     console.error("Failed to parse intent:", content, error);
     // If parsing fails, return a conversation intent with error handling
@@ -765,6 +786,13 @@ export type ActionContext =
     }
   | { type: "list_deleted"; name: string }
   | { type: "task_completed_with_list"; task: string; listName: string }
+  | {
+      type: "multiple_lists_shown";
+      lists: Array<{
+        name: string;
+        items: { content: string; isChecked: boolean }[];
+      }>;
+    }
   | { type: "conversation"; message: string };
 
 export async function generateActionResponse(
@@ -849,6 +877,18 @@ export async function generateActionResponse(
         ? `\nThis list is linked to a reminder: "${actionContext.linkedTaskContent}" (${actionContext.linkedTaskTimeStr})`
         : "";
       prompt = `Show the user their "${actionContext.name}" list:\n${itemsList}${reminderInfo}\n\nPresent this clearly.`;
+      break;
+    }
+    case "multiple_lists_shown": {
+      const allLists = actionContext.lists
+        .map((list) => {
+          const items = list.items
+            .map((i) => `  - [${i.isChecked ? "x" : " "}] ${i.content}`)
+            .join("\n");
+          return `**${list.name}**:\n${items}`;
+        })
+        .join("\n\n");
+      prompt = `Show the user the contents of ${actionContext.lists.length} lists:\n\n${allLists}\n\nPresent these lists clearly with the names as headers.`;
       break;
     }
     case "no_lists":
@@ -937,6 +977,13 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
           .join("\n");
       case "list_shown":
         return `${actionContext.name}:\n${actionContext.items.map((i) => `${i.isChecked ? "✓" : "○"} ${i.content}`).join("\n")}`;
+      case "multiple_lists_shown":
+        return actionContext.lists
+          .map(
+            (list) =>
+              `${list.name}:\n${list.items.map((i) => `${i.isChecked ? "✓" : "○"} ${i.content}`).join("\n")}`,
+          )
+          .join("\n\n");
       case "no_lists":
         return `You don't have any lists yet.`;
       case "list_not_found":

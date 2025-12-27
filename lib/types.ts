@@ -64,6 +64,9 @@ export type Intent =
   | SetCheckinTimeIntent
   | SetMorningReviewTimeIntent;
 
+// parseIntent can return single intent or multiple intents
+export type ParsedIntents = Intent | Intent[];
+
 export interface ReminderIntent {
   type: "reminder";
   task: string;
