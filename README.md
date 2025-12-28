@@ -13,7 +13,7 @@ A Telegram bot designed to help manage ADHD through natural language task remind
 ## Tech Stack
 
 - **Runtime**: Vercel Serverless Functions (TypeScript)
-- **LLM**: Anthropic Claude 3.5 Sonnet
+- **LLM**: OpenRouter (configurable models for intent parsing vs chat)
 - **Transcription**: OpenAI Whisper
 - **Database**: Upstash Redis
 - **Scheduler**: Upstash QStash
@@ -31,7 +31,7 @@ A Telegram bot designed to help manage ADHD through natural language task remind
 
 3. **OpenAI**: Get an API key from [platform.openai.com](https://platform.openai.com/api-keys)
 
-4. **Anthropic**: Get an API key from [console.anthropic.com](https://console.anthropic.com/)
+4. **OpenRouter**: Get an API key from [openrouter.ai](https://openrouter.ai/keys)
 
 5. **Upstash**: Sign up at [console.upstash.com](https://console.upstash.com/)
    - Create a Redis database
@@ -113,8 +113,8 @@ For local development, you'll need to use a tool like ngrok to expose your local
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Telegram  │────▶│    Vercel    │────▶│   Claude    │
-│     App     │     │   Functions  │     │  (Intent)   │
+│   Telegram  │────▶│    Vercel    │────▶│ OpenRouter  │
+│     App     │     │   Functions  │     │    (LLM)    │
 └─────────────┘     └──────────────┘     └─────────────┘
        │                   │                    │
        │                   ▼                    │
@@ -134,6 +134,48 @@ For local development, you'll need to use a tool like ngrok to expose your local
        │◀───────────│   QStash    │
        │            │ (Scheduler)  │
                     └──────────────┘
+```
+
+## Environment Variables
+
+### Required
+| Variable | Description |
+|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | From @BotFather |
+| `OPENAI_API_KEY` | For Whisper transcription |
+| `OPENROUTER_API_KEY` | For LLM access |
+| `UPSTASH_REDIS_REST_URL` | Redis connection URL |
+| `UPSTASH_REDIS_REST_TOKEN` | Redis auth token |
+| `QSTASH_TOKEN` | QStash API token |
+| `QSTASH_CURRENT_SIGNING_KEY` | Webhook verification |
+| `QSTASH_NEXT_SIGNING_KEY` | Webhook verification |
+| `BASE_URL` | Production URL for QStash callbacks |
+
+### Optional
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENROUTER_MODEL_CHAT` | `x-ai/grok-3-fast` | Model for chat responses |
+| `OPENROUTER_MODEL_INTENT` | (uses chat model) | Model for intent parsing |
+| `OPENROUTER_CHAT_PARAMS` | `{}` | JSON object with extra API params for chat |
+| `OPENROUTER_INTENT_PARAMS` | `{}` | JSON object with extra API params for intent |
+| `ALLOWED_USERS` | (none) | Comma-separated usernames/IDs for access control |
+| `USER_TIMEZONE` | `America/Los_Angeles` | User's timezone |
+| `BRAINTRUST_API_KEY` | (none) | For LLM call tracing |
+
+### Example: Configuring Model Parameters
+```bash
+# Use different models for intent parsing vs chat
+OPENROUTER_MODEL_CHAT=anthropic/claude-3.5-sonnet
+OPENROUTER_MODEL_INTENT=openai/gpt-4o-mini
+
+# Disable reasoning for intent parsing (useful for reasoning models)
+OPENROUTER_INTENT_PARAMS={"reasoning":false}
+
+# Set temperature for chat responses  
+OPENROUTER_CHAT_PARAMS={"temperature":0.7}
+
+# Nested parameters (e.g., OpenAI reasoning effort)
+OPENROUTER_INTENT_PARAMS={"reasoning":{"effort":"low"}}
 ```
 
 ## License
