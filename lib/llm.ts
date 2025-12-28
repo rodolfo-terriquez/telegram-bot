@@ -255,7 +255,7 @@ export async function parseIntent(
 
   const response = await client.chat.completions.create({
     model: getIntentModel(),
-    max_tokens: 500,
+    max_tokens: 2000, // Higher limit to accommodate reasoning models that use tokens for thinking
     messages,
   });
 
