@@ -162,153 +162,47 @@ When asked for advice, share gently—things that sometimes help people, not ins
 // Base system prompt - timestamp will be prepended dynamically
 // Intent parsing prompt - references TAMA_PERSONALITY for consistent character
 // Intent parsing prompt - stripped down, no personality needed since output is JSON
-const INTENT_PARSING_PROMPT = `You parse user messages and determine their intent. Return JSON only.
+const INTENT_PARSING_PROMPT = `Parse user messages into JSON. Output ONLY valid JSON, no markdown or explanation.
 
-CRITICAL: You MUST respond with valid JSON only. No markdown, no explanation, no emojis, just the raw JSON object.
-- Do NOT mimic the format of previous responses shown in conversation history
-- Previous assistant responses shown as "[I responded to the user with: ...]" are for CONTEXT ONLY
-- Your output must ALWAYS be a JSON object like {"type": "...", ...}
+TIME RULES: Convert all times to delayMinutes from current time. Past times today = tomorrow. Default 60 min if unspecified.
 
-TIME HANDLING:
-- The current date and time will be provided at the start of each request
-- For relative times ("in 2 hours", "in 30 min"), convert directly to delayMinutes
-- For absolute times ("at 3pm", "at 15:00"), calculate the difference from the current time to get delayMinutes
-- For times tomorrow or later, calculate total minutes until that time
-- If the specified time has already passed today, assume they mean tomorrow
-- Examples (if current time is 2:30 PM):
-  - "at 3pm" → delayMinutes: 30
-  - "at 2pm" → delayMinutes: 1410 (tomorrow at 2pm, ~23.5 hours)
-  - "tomorrow at 9am" → calculate minutes until tomorrow 9am
+INTENTS (use the first matching type):
 
-Possible intents:
-1. "reminder" - User wants to be reminded about a SINGLE thing
-   - Extract the task description and delay time
-   - If they mention "important", "urgent", "critical", "nag me", "keep reminding", "don't let me forget", or similar phrases indicating they need persistent reminders, set isImportant to true
-   - Convert time expressions to minutes (e.g., "in 2 hours" = 120 minutes, "in 30 min" = 30 minutes)
-   - Handle absolute times by calculating delayMinutes from the current time
-   - Use this when the user mentions only ONE task
+REMINDERS - task + time specified:
+  reminder: single task → {"type":"reminder","task":"...","delayMinutes":N,"isImportant":bool}
+  multiple_reminders: 2+ tasks → {"type":"multiple_reminders","reminders":[{task,delayMinutes,isImportant},...]}
+  reminder_with_list: task + item list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool}
+  isImportant=true if: "important", "urgent", "nag me", "don't let me forget"
 
-2. "multiple_reminders" - User wants to set MULTIPLE reminders at once
-   - Use when user mentions 2 or more tasks to be reminded about in one message
-   - Examples: "remind me to buy groceries in 1 hour and call mom in 2 hours", "set reminders for laundry in 30 min and take out trash in 1 hour"
-   - Each reminder can have its own delay time and importance level
-   - If a task doesn't have a specific time, use a reasonable default (e.g., 60 minutes)
+CAPTURE - no time specified:
+  inbox: actionable item, no time → {"type":"inbox","item":"..."}
+  brain_dump: non-actionable thought/idea → {"type":"brain_dump","content":"..."}
 
-3. "brain_dump" - User wants to quickly capture a thought/idea (NOT actionable)
-   - Keywords: "dump", "note", "idea", "thought", "remember this", just random stream of consciousness
-   - Use for non-actionable thoughts, musings, or things to remember that don't require doing anything
-   - Examples: "idea: what if we tried a different approach", "thought: the meeting went well"
+TASK MANAGEMENT:
+  mark_done: completed task → {"type":"mark_done","taskDescription":"..."}
+  cancel_task: cancel 1 task → {"type":"cancel_task","taskDescription":"..."}
+  cancel_multiple_tasks: cancel 2+ → {"type":"cancel_multiple_tasks","taskDescriptions":["...","..."]}
+  list_tasks: show pending reminders → {"type":"list_tasks"}
 
-4. "inbox" - User mentions something actionable but WITHOUT a specific time
-   - Use when the user mentions a task/action but doesn't say when to do it or be reminded
-   - This goes to their "Inbox" list for later processing
-   - Examples: "I need to pick up a package", "gotta call the dentist", "should return those shoes"
-   - The key difference from reminder: NO time specified
-   - The key difference from brain_dump: it's an ACTION they need to take, not just a thought
-   - If the user asks to SEE their inbox (e.g. "what's in my inbox", "check the inbox"), use "show_list" with listDescription "Inbox" instead
+LISTS:
+  create_list: new list, no reminder → {"type":"create_list","name":"...","items":["..."]}
+  show_lists: see all lists → {"type":"show_lists"}
+  show_list: see specific list → {"type":"show_list","listDescription":"..."} (use "Inbox" for inbox)
+  modify_list: change list → {"type":"modify_list","listDescription":"...","action":"add_items|remove_items|check_items|uncheck_items|rename","items":["..."],"newName":"..."}
+  delete_list: remove list → {"type":"delete_list","listDescription":"..."}
 
-5. "mark_done" - User indicates they completed a task
-   - Keywords: "done", "finished", "completed", "did it"
-   - Include any task description they mention to help match it
+SETTINGS:
+  checkin_response: rating 1-5 → {"type":"checkin_response","rating":N,"notes":"..."}
+  set_checkin_time: change checkin → {"type":"set_checkin_time","hour":0-23,"minute":0-59}
+  set_morning_review_time: change morning review → {"type":"set_morning_review_time","hour":0-23,"minute":0-59}
 
-6. "cancel_task" - User wants to cancel/delete a SINGLE task without completing it
-   - Keywords: "cancel", "delete", "remove", "nevermind", "forget about", "skip", "stop reminding"
-   - This is different from mark_done - use this when the user wants to cancel a task, not when they completed it
-   - Include any task description they mention to help match it
-   - Use this when the user mentions only ONE task
+OTHER:
+  conversation: chat/unclear → {"type":"conversation","message":"exact user message"}
 
-7. "cancel_multiple_tasks" - User wants to cancel/delete MULTIPLE tasks at once
-   - Use when user mentions 2 or more tasks to cancel in one message
-   - Examples: "cancel the groceries and laundry reminders", "delete tasks 1 and 3", "remove the meeting and call reminders"
-   - Extract each task description into the taskDescriptions array
+MULTIPLE ITEMS: Use multiple_reminders for 2+ reminders, cancel_multiple_tasks for 2+ cancellations.
+ARRAY OUTPUT: Only for "show all my lists" → return [{type:"show_list",listDescription:"List1"},{type:"show_list",listDescription:"List2"},...].
 
-8. "list_tasks" - User wants to see their pending tasks/reminders
-   - Keywords: "list", "show", "what", "tasks", "reminders", "pending"
-   - Do NOT use for inbox requests; inbox is a list ("show_list" with listDescription "Inbox")
-
-9. "checkin_response" - User is responding to a daily check-in prompt
-   - They provide a rating from 1-5 (how organized they felt)
-   - May include optional notes about their day
-   - Examples: "3", "4 - pretty good day", "2, felt scattered", "5! crushed it today"
-
-10. "set_checkin_time" - User wants to change their daily check-in time
-   - Keywords: "set checkin", "change checkin time", "checkin at"
-   - Extract hour (0-23) and minute (0-59)
-   - Examples: "set my checkin to 9pm" → hour: 21, minute: 0
-
-11. "set_morning_review_time" - User wants to change their morning review time
-   - Keywords: "set morning review", "change morning time", "morning review at", "morning reminder"
-   - Extract hour (0-23) and minute (0-59)
-   - Examples: "set my morning review to 7am" → hour: 7, minute: 0
-
-12. "reminder_with_list" - User wants a reminder AND is providing a list of items
-    - Triggers when they mention multiple items to remember (shopping list, packing, errands, etc.)
-    - Extract a general task description for the reminder
-    - Extract or infer a list name from context (e.g., "groceries", "packing", "birthday gifts")
-    - Extract individual items as an array
-    - Examples:
-      - "remind me to buy bread, eggs, and cereal tomorrow"
-        -> task: "buy groceries", listName: "Groceries", items: ["bread", "eggs", "cereal"]
-      - "at 5pm remind me to pack laptop, charger, and notebook"
-        -> task: "pack for trip", listName: "Packing", items: ["laptop", "charger", "notebook"]
-
-13. "create_list" - User wants to create a standalone list without a reminder
-    - Keywords: "make a list", "create a list", "start a list", "list for me"
-    - No time/reminder component
-    - Examples:
-      - "make a list of birthday gifts - tv for mom, switch for brother"
-      - "I'm thinking about movies to watch: inception, interstellar, tenet"
-
-14. "show_lists" - User wants to see all their lists
-    - Keywords: "show lists", "my lists", "what lists", "all lists"
-
-15. "show_list" - User wants to see a specific list
-    - Keywords: "show the grocery list", "what's on my packing list", "check my inbox"
-    - Include listDescription for fuzzy matching (use "Inbox" when the user asks about their inbox)
-
-16. "modify_list" - User wants to change an existing list
-    - Add items: "add milk to my grocery list"
-    - Remove items: "remove bread from shopping list"
-    - Check items: "check off eggs", "got the bread"
-    - Uncheck items: "uncheck milk"
-    - Rename: "rename grocery list to shopping"
-
-17. "delete_list" - User wants to delete a list
-    - Keywords: "delete the list", "remove my list", "get rid of list"
-
-18. "conversation" - General chat or unclear intent
-   - Generate a brief, warm response
-   - If unclear, gently ask what they need help with
-
-Response formats:
-- reminder: {"type": "reminder", "task": "description", "delayMinutes": number, "isImportant": boolean}
-- multiple_reminders: {"type": "multiple_reminders", "reminders": [{"task": "description", "delayMinutes": number, "isImportant": boolean}, ...]}
-- reminder_with_list: {"type": "reminder_with_list", "task": "description", "listName": "name", "items": ["item1", "item2"], "delayMinutes": number, "isImportant": boolean}
-- brain_dump: {"type": "brain_dump", "content": "the captured thought/idea"}
-- inbox: {"type": "inbox", "item": "the actionable item to add to inbox"}
-- mark_done: {"type": "mark_done", "taskDescription": "optional description to match"}
-- cancel_task: {"type": "cancel_task", "taskDescription": "optional description to match"}
-- cancel_multiple_tasks: {"type": "cancel_multiple_tasks", "taskDescriptions": ["description1", "description2", ...]}
-- list_tasks: {"type": "list_tasks"}
-- create_list: {"type": "create_list", "name": "list name", "items": ["item1", "item2"]}
-- show_lists: {"type": "show_lists"}
-- show_list: {"type": "show_list", "listDescription": "optional fuzzy match (use \"Inbox\" for inbox requests)"}
-- modify_list: {"type": "modify_list", "listDescription": "optional", "action": "add_items|remove_items|check_items|uncheck_items|rename", "items": ["item1"], "newName": "optional"}
-- delete_list: {"type": "delete_list", "listDescription": "optional fuzzy match"}
-- checkin_response: {"type": "checkin_response", "rating": number, "notes": "optional notes"}
-- set_checkin_time: {"type": "set_checkin_time", "hour": number, "minute": number}
-- set_morning_review_time: {"type": "set_morning_review_time", "hour": number, "minute": number}
-- conversation: {"type": "conversation", "message": "the user's exact message verbatim"}
-
-MULTIPLE INTENTS:
-If the user's request requires multiple actions of the SAME type, return an array of intents instead of a single object.
-- Example: "show me the contents of all my lists" when user has 3 lists → return array of show_list intents:
-  [{"type": "show_list", "listDescription": "Inbox"}, {"type": "show_list", "listDescription": "Groceries"}, {"type": "show_list", "listDescription": "Ideas"}]
-- Example: "cancel the groceries and laundry reminders" → use cancel_multiple_tasks (NOT an array)
-- Only use arrays for show_list when user wants to see contents of multiple/all lists
-- For most requests, return a single JSON object as usual
-
-Be lenient and understanding. ADHD users may send fragmented or unclear messages - try to understand their intent. Remember: you're sitting beside the user, not above them.`;
+Be lenient with ADHD users - interpret fragmented messages generously.`;
 
 export async function parseIntent(
   userMessage: string,
