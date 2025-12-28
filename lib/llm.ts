@@ -178,9 +178,11 @@ REMINDERS - task + time specified:
   reminder_with_list: task + item list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool}
   isImportant=true if: "important", "urgent", "nag me", "don't let me forget"
 
-CAPTURE - no time specified:
+CAPTURE - no time specified, user EXPLICITLY wants to save something:
   inbox: actionable item, no time → {"type":"inbox","item":"..."}
-  brain_dump: non-actionable thought/idea → {"type":"brain_dump","content":"..."}
+  brain_dump: user explicitly wants to capture a thought → {"type":"brain_dump","content":"..."}
+    Keywords: "dump", "note to self", "save this thought", "remember this idea"
+    NOT for: casual conversation, answering questions, sharing feelings (use "conversation" instead)
 
 TASK MANAGEMENT:
   mark_done: completed task → {"type":"mark_done","taskDescription":"..."}
@@ -201,7 +203,8 @@ SETTINGS:
   set_morning_review_time: change morning review → {"type":"set_morning_review_time","hour":0-23,"minute":0-59}
 
 OTHER:
-  conversation: chat/unclear → {"type":"conversation","message":"exact user message"}
+  conversation: chat, sharing feelings, answering questions, unclear → {"type":"conversation","message":"exact user message"}
+    Use this for: greetings, emotional sharing, small talk, responding to Tama's questions
 
 MULTIPLE ITEMS: Use multiple_reminders for 2+ reminders, cancel_multiple_tasks for 2+ cancellations.
 ARRAY OUTPUT: Only for "show all my lists" → return [{type:"show_list",listDescription:"List1"},{type:"show_list",listDescription:"List2"},...].
