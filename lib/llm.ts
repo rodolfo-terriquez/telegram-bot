@@ -226,8 +226,9 @@ SETTINGS:
   set_morning_review_time: change morning review → {"type":"set_morning_review_time","hour":0-23,"minute":0-59}
 
 OTHER:
-  conversation: chat, sharing feelings, answering questions, unclear → {"type":"conversation","message":"exact user message"}
+  conversation: chat, sharing feelings, answering questions, unclear → {"type":"conversation","message":"<COPY USER INPUT VERBATIM>"}
     Use this for: greetings, emotional sharing, small talk, responding to Tama's questions
+    IMPORTANT: Copy the user's exact words into "message" - do NOT generate a response, do NOT paraphrase
 
 MULTIPLE ITEMS: Use multiple_reminders for 2+ reminders, cancel_multiple_tasks for 2+ cancellations.
 ARRAY OUTPUT: Only for "show all my lists" → return [{type:"show_list",listDescription:"List1"},{type:"show_list",listDescription:"List2"},...].
