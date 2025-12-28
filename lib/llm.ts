@@ -18,9 +18,13 @@ const logger = initLogger({
 
 let openrouterClient: OpenAI | null = null;
 
-// Model to use - configurable via environment variable
-function getModel(): string {
-  return process.env.OPENROUTER_MODEL || "x-ai/grok-3-fast";
+// Models to use - configurable via environment variables
+function getChatModel(): string {
+  return process.env.OPENROUTER_MODEL_CHAT || "x-ai/grok-3-fast";
+}
+
+function getIntentModel(): string {
+  return process.env.OPENROUTER_MODEL_INTENT || getChatModel();
 }
 
 function getClient(): OpenAI {
@@ -250,7 +254,7 @@ export async function parseIntent(
   messages.push({ role: "user", content: JSON.stringify(currentEntry) });
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getIntentModel(),
     max_tokens: 500,
     messages,
   });
@@ -311,7 +315,7 @@ Generate the initial reminder notification for a task. This is the first time yo
   const taskPrompt = `Send a reminder about: "${taskContent}"`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -337,7 +341,7 @@ Generate the final reminder message for a task. This is the last nudge - after t
   const taskPrompt = `Send the final reminder about: "${taskContent}"`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -363,7 +367,7 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
   const taskPrompt = `I sent a reminder about "${taskContent}" a few minutes ago but haven't heard back. Generate a brief follow-up.`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -403,7 +407,7 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
   const taskPrompt = `Remind me about: ${task.content}`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -442,7 +446,7 @@ Generate a soft daily check-in. Ask the user to rate how their day felt on a sca
   const taskPrompt = "Generate a daily check-in prompt.";
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -467,7 +471,7 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
   const taskPrompt = "Generate an end-of-day message.";
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -523,7 +527,7 @@ Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as 
       : "Generate a brief morning greeting. There are no inbox items or overdue tasks right now.";
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 400,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -599,7 +603,7 @@ ${dumps.length > 0 ? `Brain dump topics:\n${dumpsText}` : ""}
 Please share any patterns you notice, gently.`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 600,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
   });
@@ -842,7 +846,7 @@ export async function generateActionResponse(
 Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be warm but brief. For task lists, you may format with bullet points or numbers.`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 200,
     messages: buildContextMessages(systemPrompt, prompt, conversationContext),
   });
@@ -945,7 +949,7 @@ export async function generateConversationSummary(
     : `MESSAGES TO SUMMARIZE:\n${formattedMessages}`;
 
   const response = await client.chat.completions.create({
-    model: getModel(),
+    model: getChatModel(),
     max_tokens: 500,
     messages: [
       {
