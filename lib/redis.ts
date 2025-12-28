@@ -596,7 +596,6 @@ export async function getActiveChats(): Promise<number[]> {
 const CONVERSATION_KEY = (chatId: number) => `conversation:${chatId}`;
 const MAX_CONVERSATION_PAIRS = 30; // Trigger summarization at 30 pairs
 const RECENT_PAIRS_TO_KEEP = 10; // Keep 10 most recent pairs verbatim after summarization
-const CONVERSATION_TTL = 24 * 60 * 60; // 24 hours
 
 export interface ConversationMessage {
   role: "user" | "assistant";
@@ -699,7 +698,7 @@ export async function addToConversation(
       summary,
       summaryUpdatedAt: conversationData.summaryUpdatedAt,
     };
-    await redis.set(key, JSON.stringify(tempData), { ex: CONVERSATION_TTL });
+    await redis.set(key, JSON.stringify(tempData));
 
     // Generate new summary in background, then update ONLY the summary field
     // We re-read current data to avoid overwriting messages added while summarizing
@@ -712,9 +711,7 @@ export async function addToConversation(
           summary: newSummary,
           summaryUpdatedAt: Date.now(),
         };
-        await redis.set(key, JSON.stringify(updatedData), {
-          ex: CONVERSATION_TTL,
-        });
+        await redis.set(key, JSON.stringify(updatedData));
       })
       .catch((err) => {
         console.error("Failed to generate conversation summary:", err);
@@ -726,7 +723,7 @@ export async function addToConversation(
       summary,
       summaryUpdatedAt: conversationData.summaryUpdatedAt,
     };
-    await redis.set(key, JSON.stringify(updatedData), { ex: CONVERSATION_TTL });
+    await redis.set(key, JSON.stringify(updatedData));
   }
 }
 
