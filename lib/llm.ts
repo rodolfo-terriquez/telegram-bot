@@ -27,6 +27,29 @@ function getIntentModel(): string {
   return process.env.OPENROUTER_MODEL_INTENT || getChatModel();
 }
 
+// Optional extra parameters for API calls (e.g., temperature, reasoning)
+function getChatParams(): Record<string, unknown> {
+  const paramsJson = process.env.OPENROUTER_CHAT_PARAMS;
+  if (!paramsJson) return {};
+  try {
+    return JSON.parse(paramsJson);
+  } catch {
+    console.warn("Invalid OPENROUTER_CHAT_PARAMS JSON, ignoring");
+    return {};
+  }
+}
+
+function getIntentParams(): Record<string, unknown> {
+  const paramsJson = process.env.OPENROUTER_INTENT_PARAMS;
+  if (!paramsJson) return {};
+  try {
+    return JSON.parse(paramsJson);
+  } catch {
+    console.warn("Invalid OPENROUTER_INTENT_PARAMS JSON, ignoring");
+    return {};
+  }
+}
+
 function getClient(): OpenAI {
   if (!openrouterClient) {
     const apiKey = process.env.OPENROUTER_API_KEY;
@@ -260,6 +283,7 @@ export async function parseIntent(
     model: getIntentModel(),
     max_tokens: 2000, // Higher limit to accommodate reasoning models that use tokens for thinking
     messages,
+    ...getIntentParams(),
   });
 
   // Extract text from the response
@@ -321,6 +345,7 @@ Generate the initial reminder notification for a task. This is the first time yo
     model: getChatModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -347,6 +372,7 @@ Generate the final reminder message for a task. This is the last nudge - after t
     model: getChatModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -373,6 +399,7 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
     model: getChatModel(),
     max_tokens: 100,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -413,6 +440,7 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
     model: getChatModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -452,6 +480,7 @@ Generate a soft daily check-in. Ask the user to rate how their day felt on a sca
     model: getChatModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -477,6 +506,7 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
     model: getChatModel(),
     max_tokens: 150,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -533,6 +563,7 @@ Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as 
     model: getChatModel(),
     max_tokens: 400,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -609,6 +640,7 @@ Please share any patterns you notice, gently.`;
     model: getChatModel(),
     max_tokens: 600,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -852,6 +884,7 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
     model: getChatModel(),
     max_tokens: 200,
     messages: buildContextMessages(systemPrompt, prompt, conversationContext),
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
@@ -973,6 +1006,7 @@ ${existingSummary ? "IMPORTANT: An existing summary from earlier in the conversa
         content: summaryContext,
       },
     ],
+    ...getChatParams(),
   });
 
   const content = response.choices[0]?.message?.content;
