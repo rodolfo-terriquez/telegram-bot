@@ -290,7 +290,10 @@ SETTINGS:
   set_morning_review_time → {"type":"set_morning_review_time","hour":N,"minute":N}
 
 OTHER:
-  conversation → {"type":"conversation","message":"<COPY VERBATIM>"} - greetings, feelings, small talk
+  conversation → {"type":"conversation","message":"<USER'S EXACT MESSAGE>"} - greetings, feelings, small talk
+
+  CRITICAL: For conversation type, copy the user's ORIGINAL message verbatim into the message field.
+  DO NOT generate a response or reply - just copy their exact words.
 
 CONTEXT RULE: Use conversation history to infer which list the user means. Default to "Inbox" if unclear.
 Be lenient with ADHD users - when in doubt between reminder and inbox, choose inbox.`;
