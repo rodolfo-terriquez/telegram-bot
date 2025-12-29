@@ -271,17 +271,22 @@ INBOX (when NO day or time):
 
   Note: Inbox items have NO dayTag anymore. They show in every morning review.
 
-REMINDERS MANAGEMENT:
+REMINDERS MANAGEMENT (for scheduled reminders with times/dates):
   mark_done → {"type":"mark_done","taskDescription":"..."}
-  cancel_task → {"type":"cancel_task","taskDescription":"..."}
-  cancel_multiple_tasks → {"type":"cancel_multiple_tasks","taskDescriptions":[...]}
+  cancel_task → {"type":"cancel_task","taskDescription":"..."} - ONLY for scheduled reminders
+  cancel_multiple_tasks → {"type":"cancel_multiple_tasks","taskDescriptions":[...]} - ONLY for scheduled reminders
   list_tasks → {"type":"list_tasks"} - "show reminders", "what's scheduled", "my reminders"
 
-LISTS:
+  IMPORTANT: Use cancel_task ONLY for scheduled reminders (tasks with @day time).
+  To remove items from Inbox or other lists, use modify_list with action "remove_items" instead.
+
+LISTS (for managing list items - Inbox, grocery list, etc.):
   create_list → {"type":"create_list","name":"...","items":[...]}
-  show_lists → {"type":"show_lists"}
-  show_list → {"type":"show_list","listDescription":"..."}
+  show_lists → {"type":"show_lists"} - "show my lists", "what lists do I have"
+  show_list → {"type":"show_list","listDescription":"..."} - "show my inbox", "what's in my inbox", "show the grocery list"
   modify_list → {"type":"modify_list","listDescription":"...","action":"add_items|remove_items|check_items|uncheck_items|rename","items":[...],"newName":"..."}
+    - remove_items: "remove X from inbox", "clear the accountant item", "delete groceries from the list"
+    - check_items: "check off X", "mark X as done" (for list items, not reminders)
   delete_list → {"type":"delete_list","listDescription":"..."}
 
 SETTINGS:
@@ -295,8 +300,12 @@ OTHER:
   CRITICAL: For conversation type, copy the user's ORIGINAL message verbatim into the message field.
   DO NOT generate a response or reply - just copy their exact words.
 
-CONTEXT RULE: Use conversation history to infer which list the user means. Default to "Inbox" if unclear.
-Be lenient with ADHD users - when in doubt between reminder and inbox, choose inbox.`;
+CONTEXT RULES:
+- Use conversation history to infer which list the user means when they say "those items", "them", etc.
+- If user just viewed a list (e.g., "what's in my inbox") and then says "clear those", they mean items from that list
+- When removing items from a list, look at what items were shown in the recent conversation
+- Default to "Inbox" if list name is unclear
+- Be lenient with ADHD users - when in doubt between reminder and inbox, choose inbox`;
 
 export async function parseIntent(
   userMessage: string,
