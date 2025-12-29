@@ -970,13 +970,21 @@ export async function generateActionResponse(
       break;
   }
 
-  const systemPrompt = `${TAMA_PERSONALITY}
+  // For conversations, don't constrain response length - let the model respond naturally
+  // For action acknowledgments, keep it brief
+  const isConversation = actionContext.type === "conversation";
+
+  const systemPrompt = isConversation
+    ? `${TAMA_PERSONALITY}
+
+Have a natural conversation with the user. Respond as you would to a friend - no length constraints.`
+    : `${TAMA_PERSONALITY}
 
 Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be warm but brief. For task lists, you may format with bullet points or numbers.`;
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 200,
+    max_tokens: isConversation ? 1000 : 200,
     messages: buildContextMessages(systemPrompt, prompt, conversationContext),
     ...getChatParams(),
   });
