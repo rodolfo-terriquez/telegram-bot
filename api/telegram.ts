@@ -354,12 +354,19 @@ async function handleReminders(
   }[] = [];
 
   for (const reminder of reminders) {
+    // For day-only reminders, normalize to noon of target day (exact time doesn't matter)
+    let effectiveDelayMinutes = reminder.delayMinutes;
+    if (reminder.isDayOnly) {
+      const normalizedTime = normalizeToNoon(reminder.delayMinutes);
+      effectiveDelayMinutes = Math.round((normalizedTime - Date.now()) / 60000);
+    }
+
     // Create the task in Redis
     const task = await redis.createTask(
       chatId,
       reminder.task,
       reminder.isImportant,
-      reminder.delayMinutes,
+      effectiveDelayMinutes,
       reminder.isDayOnly || false,
     );
 
@@ -369,7 +376,7 @@ async function handleReminders(
         const messageId = await scheduleReminder(
           chatId,
           task.id,
-          reminder.delayMinutes,
+          effectiveDelayMinutes,
           false,
         );
         task.qstashMessageId = messageId;
@@ -381,8 +388,8 @@ async function handleReminders(
 
     // For day-only reminders, show day name instead of time delay
     const timeStr = reminder.isDayOnly
-      ? `on ${formatDayFromDelay(reminder.delayMinutes)}`
-      : `in ${formatDelay(reminder.delayMinutes)}`;
+      ? `on ${formatDayFromDelay(effectiveDelayMinutes)}`
+      : `in ${formatDelay(effectiveDelayMinutes)}`;
 
     createdTasks.push({
       task: reminder.task,
@@ -745,6 +752,13 @@ async function handleReminderWithList(
   context: ConversationContext,
   skipSend: boolean = false,
 ): Promise<string> {
+  // For day-only reminders, normalize to noon of target day (exact time doesn't matter)
+  let effectiveDelayMinutes = intent.delayMinutes;
+  if (intent.isDayOnly) {
+    const normalizedTime = normalizeToNoon(intent.delayMinutes);
+    effectiveDelayMinutes = Math.round((normalizedTime - Date.now()) / 60000);
+  }
+
   // Create the list first
   const list = await redis.createList(chatId, intent.listName, intent.items);
 
@@ -753,7 +767,7 @@ async function handleReminderWithList(
     chatId,
     intent.task,
     intent.isImportant,
-    intent.delayMinutes,
+    effectiveDelayMinutes,
     intent.isDayOnly || false,
   );
 
@@ -771,7 +785,7 @@ async function handleReminderWithList(
       const messageId = await scheduleReminder(
         chatId,
         task.id,
-        intent.delayMinutes,
+        effectiveDelayMinutes,
         false,
       );
       task.qstashMessageId = messageId;
@@ -783,8 +797,8 @@ async function handleReminderWithList(
 
   // For day-only reminders, show day name instead of time delay
   const timeStr = intent.isDayOnly
-    ? `on ${formatDayFromDelay(intent.delayMinutes)}`
-    : `in ${formatDelay(intent.delayMinutes)}`;
+    ? `on ${formatDayFromDelay(effectiveDelayMinutes)}`
+    : `in ${formatDelay(effectiveDelayMinutes)}`;
 
   const response = await generateActionResponse(
     {
@@ -1253,10 +1267,43 @@ function formatDelay(minutes: number): string {
   return `${hours}h ${remainingMinutes}m`;
 }
 
-// Format day name for day-only reminders (e.g., "Tuesday", "tomorrow")
-function formatDayFromDelay(minutes: number): string {
+// For day-only reminders, normalize to noon of the target day
+// We don't need precision - just need to land on the correct day for morning review filtering
+function normalizeToNoon(delayMinutes: number): number {
   const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
-  const targetDate = new Date(Date.now() + minutes * 60 * 1000);
+  const roughTargetTime = Date.now() + delayMinutes * 60 * 1000;
+
+  // Get the date in user's timezone
+  const targetDateStr = new Date(roughTargetTime).toLocaleDateString("en-US", { timeZone: timezone });
+  const [month, day, year] = targetDateStr.split("/").map(Number);
+
+  // Find noon (12:00) on that day in user's timezone
+  // Search within a reasonable window to find when it's noon in user's timezone
+  const baseMidnightUTC = Date.UTC(year, month - 1, day, 0, 0, 0);
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit",
+    hour12: false,
+  });
+
+  for (let hourOffset = 0; hourOffset < 36; hourOffset++) {
+    const testTime = baseMidnightUTC + hourOffset * 60 * 60 * 1000;
+    const hour = parseInt(formatter.format(new Date(testTime)));
+    if (hour === 12) {
+      return testTime;
+    }
+  }
+
+  // Fallback: just return rough target time
+  return roughTargetTime;
+}
+
+// Format day name for day-only reminders (e.g., "Tuesday", "tomorrow")
+function formatDayFromDelay(delayMinutes: number): string {
+  const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
+  const targetTime = normalizeToNoon(delayMinutes);
+  const targetDate = new Date(targetTime);
   const now = new Date();
 
   // Get date strings in user's timezone
@@ -1268,7 +1315,6 @@ function formatDayFromDelay(minutes: number): string {
   if (targetStr === nowStr) return "today";
   if (targetStr === tomorrowStr) return "tomorrow";
 
-  // Return day name
   return targetDate.toLocaleDateString("en-US", {
     weekday: "long",
     timeZone: timezone,

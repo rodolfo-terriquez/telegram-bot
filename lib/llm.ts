@@ -263,7 +263,7 @@ REMINDERS (when day OR time mentioned):
   - Day-only reminders appear in morning review but DON'T send notifications
   - Timed reminders send notifications at the scheduled time
 
-  Note: For day-only reminders, calculate delayMinutes to end of that day (11:59 PM).
+  Note: For day-only reminders, calculate delayMinutes to roughly noon (12:00 PM) of that day. Exact time doesn't matter.
 
 INBOX (when NO day or time):
   inbox → {"type":"inbox","item":"..."}
