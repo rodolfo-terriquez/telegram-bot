@@ -329,6 +329,10 @@ async function handleIntent(
         context,
         skipSend,
       );
+
+    default:
+      console.error(`Unknown intent type: ${intent.type}`, JSON.stringify(intent));
+      return null;
   }
 }
 
