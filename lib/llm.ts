@@ -364,17 +364,16 @@ export async function parseIntent(
         .replace(/\n?```$/, "");
     }
 
-    // Try to find JSON array first (for multiple intents), then object
-    const jsonArrayMatch = jsonText.match(/\[[\s\S]*\]/);
-    const jsonObjectMatch = jsonText.match(/\{[\s\S]*\}/);
-
-    if (jsonArrayMatch) {
+    // Try to parse the whole JSON string first
+    // Check if it starts with [ or { to determine if it's array or object
+    const trimmed = jsonText.trim();
+    if (trimmed.startsWith('[')) {
       // Multiple intents returned as array
-      const intents = JSON.parse(jsonArrayMatch[0]) as Intent[];
+      const intents = JSON.parse(trimmed) as Intent[];
       return intents;
-    } else if (jsonObjectMatch) {
+    } else if (trimmed.startsWith('{')) {
       // Single intent returned as object
-      const intent = JSON.parse(jsonObjectMatch[0]) as Intent;
+      const intent = JSON.parse(trimmed) as Intent;
       return intent;
     }
 

@@ -640,12 +640,21 @@ async function handleCancelMultipleTasks(
   context: ConversationContext,
   skipSend: boolean = false,
 ): Promise<string> {
+  console.log(`[${chatId}] Searching for ${intent.taskDescriptions.length} tasks to cancel`);
+  console.log(`[${chatId}] Task descriptions:`, JSON.stringify(intent.taskDescriptions));
+
   const tasks = await redis.findTasksByDescriptions(
     chatId,
     intent.taskDescriptions,
   );
 
+  console.log(`[${chatId}] Found ${tasks.length} matching tasks`);
+  if (tasks.length > 0) {
+    console.log(`[${chatId}] Matching task IDs:`, tasks.map(t => t.id));
+  }
+
   if (tasks.length === 0) {
+    console.log(`[${chatId}] No tasks found, sending task_not_found response`);
     const response = await generateActionResponse(
       {
         type: "task_not_found",

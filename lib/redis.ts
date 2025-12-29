@@ -189,6 +189,8 @@ export async function findTasksByDescriptions(
   descriptions: string[],
 ): Promise<Task[]> {
   const tasks = await getPendingTasks(chatId);
+  console.log(`[Redis] findTasksByDescriptions: ${descriptions.length} descriptions, ${tasks.length} pending tasks`);
+
   if (tasks.length === 0) return [];
 
   const matchedTasks: Task[] = [];
@@ -197,18 +199,24 @@ export async function findTasksByDescriptions(
   for (const description of descriptions) {
     // Strip scheduling metadata and normalize both description and task content
     const normalizedDesc = stripSchedulingMetadata(description);
+    console.log(`[Redis] Searching for: "${description}" → normalized: "${normalizedDesc}"`);
+
     const matchedTask = tasks.find((t) => {
       if (usedTaskIds.has(t.id)) return false;
       const normalizedTaskContent = stripSchedulingMetadata(t.content);
-      return (
-        normalizedTaskContent.includes(normalizedDesc) ||
-        normalizedDesc.includes(normalizedTaskContent)
-      );
+      const matches = normalizedTaskContent.includes(normalizedDesc) ||
+                      normalizedDesc.includes(normalizedTaskContent);
+
+      console.log(`[Redis]   vs task: "${t.content}" → normalized: "${normalizedTaskContent}" → match: ${matches}`);
+      return matches;
     });
 
     if (matchedTask) {
+      console.log(`[Redis] ✓ Matched: ${matchedTask.id}`);
       matchedTasks.push(matchedTask);
       usedTaskIds.add(matchedTask.id);
+    } else {
+      console.log(`[Redis] ✗ No match found for: "${description}"`);
     }
   }
 
