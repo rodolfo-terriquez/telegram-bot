@@ -331,7 +331,10 @@ async function handleIntent(
       );
 
     default:
-      console.error(`Unknown intent type: ${intent.type}`, JSON.stringify(intent));
+      console.error(
+        `Unknown intent type: ${intent.type}`,
+        JSON.stringify(intent),
+      );
       return null;
   }
 }
@@ -654,8 +657,13 @@ async function handleCancelMultipleTasks(
   context: ConversationContext,
   skipSend: boolean = false,
 ): Promise<string> {
-  console.log(`[${chatId}] Searching for ${intent.taskDescriptions.length} tasks to cancel`);
-  console.log(`[${chatId}] Task descriptions:`, JSON.stringify(intent.taskDescriptions));
+  console.log(
+    `[${chatId}] Searching for ${intent.taskDescriptions.length} tasks to cancel`,
+  );
+  console.log(
+    `[${chatId}] Task descriptions:`,
+    JSON.stringify(intent.taskDescriptions),
+  );
 
   const tasks = await redis.findTasksByDescriptions(
     chatId,
@@ -664,7 +672,10 @@ async function handleCancelMultipleTasks(
 
   console.log(`[${chatId}] Found ${tasks.length} matching tasks`);
   if (tasks.length > 0) {
-    console.log(`[${chatId}] Matching task IDs:`, tasks.map(t => t.id));
+    console.log(
+      `[${chatId}] Matching task IDs:`,
+      tasks.map((t) => t.id),
+    );
   }
 
   if (tasks.length === 0) {
@@ -1274,7 +1285,9 @@ function normalizeToNoon(delayMinutes: number): number {
   const roughTargetTime = Date.now() + delayMinutes * 60 * 1000;
 
   // Get the date in user's timezone
-  const targetDateStr = new Date(roughTargetTime).toLocaleDateString("en-US", { timeZone: timezone });
+  const targetDateStr = new Date(roughTargetTime).toLocaleDateString("en-US", {
+    timeZone: timezone,
+  });
   const [month, day, year] = targetDateStr.split("/").map(Number);
 
   // Find noon (12:00) on that day in user's timezone
@@ -1307,10 +1320,14 @@ function formatDayFromDelay(delayMinutes: number): string {
   const now = new Date();
 
   // Get date strings in user's timezone
-  const targetStr = targetDate.toLocaleDateString("en-US", { timeZone: timezone });
+  const targetStr = targetDate.toLocaleDateString("en-US", {
+    timeZone: timezone,
+  });
   const nowStr = now.toLocaleDateString("en-US", { timeZone: timezone });
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-US", { timeZone: timezone });
+  const tomorrowStr = tomorrow.toLocaleDateString("en-US", {
+    timeZone: timezone,
+  });
 
   if (targetStr === nowStr) return "today";
   if (targetStr === tomorrowStr) return "tomorrow";
@@ -1360,17 +1377,22 @@ function formatFutureTime(timestamp: number): string {
   return `in ${days} day${days === 1 ? "" : "s"}`;
 }
 
-function formatScheduledTime(timestamp: number, isDayOnly: boolean = false): string {
+function formatScheduledTime(
+  timestamp: number,
+  isDayOnly: boolean = false,
+): string {
   const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
   const date = new Date(timestamp);
   const now = new Date();
 
   // For day-only reminders, don't include the time
-  const time = isDayOnly ? "" : date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    timeZone: timezone,
-  });
+  const time = isDayOnly
+    ? ""
+    : date.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: timezone,
+      });
 
   // Get date strings in user's timezone for accurate comparison
   const dateStr = date.toLocaleDateString("en-US", { timeZone: timezone });
@@ -1383,7 +1405,9 @@ function formatScheduledTime(timestamp: number, isDayOnly: boolean = false): str
 
   // Check if tomorrow (using timezone-aware comparison)
   const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-  const tomorrowStr = tomorrow.toLocaleDateString("en-US", { timeZone: timezone });
+  const tomorrowStr = tomorrow.toLocaleDateString("en-US", {
+    timeZone: timezone,
+  });
   if (dateStr === tomorrowStr) {
     return isDayOnly ? `@tomorrow` : `@tomorrow ${time}`;
   }
@@ -1563,7 +1587,7 @@ async function handleDebugCommand(chatId: number): Promise<void> {
   - Light playfulness is welcome when the moment fits
 
   Communication style:
-  - Keep it short and conversational—1-2 sentences usually
+  - Keep it conversational
   - Sound like a friend texting, not a careful assistant
   - "Maybe," "if you want," "we could" over commands
   - Skip exclamation points mostly, but you're not allergic to them

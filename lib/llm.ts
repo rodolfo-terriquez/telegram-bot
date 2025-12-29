@@ -170,7 +170,7 @@ Personality:
 - Light playfulness is welcome when the moment fits
 
 Communication style:
-- Keep it short and conversational—1-2 sentences usually
+- Keep it conversational
 - Sound like a friend texting, not a careful assistant
 - "Maybe," "if you want," "we could" over commands
 - Skip exclamation points mostly, but you're not allergic to them
@@ -372,11 +372,11 @@ export async function parseIntent(
     // Try to parse the whole JSON string first
     // Check if it starts with [ or { to determine if it's array or object
     const trimmed = jsonText.trim();
-    if (trimmed.startsWith('[')) {
+    if (trimmed.startsWith("[")) {
       // Multiple intents returned as array
       const intents = JSON.parse(trimmed) as Intent[];
       return intents;
-    } else if (trimmed.startsWith('{')) {
+    } else if (trimmed.startsWith("{")) {
       // Single intent returned as object
       const intent = JSON.parse(trimmed) as Intent;
       return intent;
@@ -408,7 +408,7 @@ Generate the initial reminder notification for a task. This is the first time yo
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 100,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -435,7 +435,7 @@ Generate the final reminder message for a task. This is the last nudge - after t
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 100,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -462,7 +462,7 @@ Generate a very brief follow-up to a reminder you sent a few minutes ago. The us
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 100,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -503,7 +503,7 @@ Keep it to 1-2 short sentences. Never use "You should..." or "Don't forget..." -
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 150,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -537,13 +537,13 @@ export async function generateCheckinPrompt(
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Generate a soft daily check-in. Ask the user to rate how their day felt on a scale of 1-5, with optional notes. Keep it to 1-2 sentences, warm and low-pressure. No exclamation points. Vary your wording to keep it fresh. Frame it as curiosity, not obligation.`;
+Generate a soft daily check-in. Ask the user to rate how their day felt on a scale of 1-5, with optional notes. Keep it warm and low-pressure. No exclamation points. Vary your wording to keep it fresh. Frame it as curiosity, not obligation.`;
 
   const taskPrompt = "Generate a daily check-in prompt.";
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 150,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -569,7 +569,7 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 150,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -628,7 +628,7 @@ Generate a gentle morning review message. This is a daily invitation for the use
 - Maybe schedule some inbox items (turn them into reminders with specific times or days)
 - Decide what to do with overdue items: reschedule them, mark them done, or drop them entirely
 
-Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as "in case you want to" or "whenever you're ready." List the items clearly so they can see what's there. Dropping items is always a valid choice. Keep your intro/outro brief, but do show the full lists.`;
+Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as "in case you want to" or "whenever you're ready." List the items clearly so they can see what's there. Dropping items is always a valid choice. Keep your intro/outro brief, but do show the full lists. Group items by the list they belong to so it's easy for the user to scan.`;
 
   const hasAnyItems = hasTodaysTasks || hasInbox || hasOverdue;
   const taskPrompt = hasAnyItems
@@ -637,7 +637,7 @@ Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as 
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 400,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -714,7 +714,7 @@ Please share any patterns you notice, gently.`;
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: 600,
+    max_tokens: 500,
     messages: buildContextMessages(systemPrompt, taskPrompt, context),
     ...getChatParams(),
   });
@@ -738,7 +738,12 @@ export type ActionContext =
     }
   | {
       type: "multiple_reminders_created";
-      reminders: { task: string; timeStr: string; isImportant: boolean; isDayOnly?: boolean }[];
+      reminders: {
+        task: string;
+        timeStr: string;
+        isImportant: boolean;
+        isDayOnly?: boolean;
+      }[];
     }
   | { type: "brain_dump_saved"; content: string }
   | {
@@ -980,11 +985,11 @@ export async function generateActionResponse(
 Have a natural conversation with the user. Respond as you would to a friend - no length constraints.`
     : `${TAMA_PERSONALITY}
 
-Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be warm but brief. For task lists, you may format with bullet points or numbers.`;
+Generate a response to acknowledge an action. Be warm but brief. For task lists, you may format with bullet points or numbers.`;
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
-    max_tokens: isConversation ? 1000 : 200,
+    max_tokens: isConversation ? 2000 : 500,
     messages: buildContextMessages(systemPrompt, prompt, conversationContext),
     ...getChatParams(),
   });
