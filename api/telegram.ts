@@ -379,10 +379,16 @@ async function handleReminders(
       }
     }
 
+    // For day-only reminders, show day name instead of time delay
+    const timeStr = reminder.isDayOnly
+      ? `on ${formatDayFromDelay(reminder.delayMinutes)}`
+      : `in ${formatDelay(reminder.delayMinutes)}`;
+
     createdTasks.push({
       task: reminder.task,
-      timeStr: formatDelay(reminder.delayMinutes),
+      timeStr,
       isImportant: reminder.isImportant,
+      isDayOnly: reminder.isDayOnly || false,
     });
   }
 
@@ -394,6 +400,7 @@ async function handleReminders(
           task: createdTasks[0].task,
           timeStr: createdTasks[0].timeStr,
           isImportant: createdTasks[0].isImportant,
+          isDayOnly: createdTasks[0].isDayOnly,
         }
       : {
           type: "multiple_reminders_created" as const,
@@ -774,7 +781,10 @@ async function handleReminderWithList(
     }
   }
 
-  const timeStr = formatDelay(intent.delayMinutes);
+  // For day-only reminders, show day name instead of time delay
+  const timeStr = intent.isDayOnly
+    ? `on ${formatDayFromDelay(intent.delayMinutes)}`
+    : `in ${formatDelay(intent.delayMinutes)}`;
 
   const response = await generateActionResponse(
     {
@@ -784,6 +794,7 @@ async function handleReminderWithList(
       listName: intent.listName,
       itemCount: intent.items.length,
       isImportant: intent.isImportant,
+      isDayOnly: intent.isDayOnly || false,
     },
     context,
   );
@@ -1242,6 +1253,28 @@ function formatDelay(minutes: number): string {
   return `${hours}h ${remainingMinutes}m`;
 }
 
+// Format day name for day-only reminders (e.g., "Tuesday", "tomorrow")
+function formatDayFromDelay(minutes: number): string {
+  const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
+  const targetDate = new Date(Date.now() + minutes * 60 * 1000);
+  const now = new Date();
+
+  // Get date strings in user's timezone
+  const targetStr = targetDate.toLocaleDateString("en-US", { timeZone: timezone });
+  const nowStr = now.toLocaleDateString("en-US", { timeZone: timezone });
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const tomorrowStr = tomorrow.toLocaleDateString("en-US", { timeZone: timezone });
+
+  if (targetStr === nowStr) return "today";
+  if (targetStr === tomorrowStr) return "tomorrow";
+
+  // Return day name
+  return targetDate.toLocaleDateString("en-US", {
+    weekday: "long",
+    timeZone: timezone,
+  });
+}
+
 function formatFutureTime(timestamp: number): string {
   const now = Date.now();
   const diff = timestamp - now;
@@ -1282,6 +1315,7 @@ function formatFutureTime(timestamp: number): string {
 }
 
 function formatScheduledTime(timestamp: number, isDayOnly: boolean = false): string {
+  const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
   const date = new Date(timestamp);
   const now = new Date();
 
@@ -1289,30 +1323,30 @@ function formatScheduledTime(timestamp: number, isDayOnly: boolean = false): str
   const time = isDayOnly ? "" : date.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
-    timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
+    timeZone: timezone,
   });
 
-  // Check if today
-  const isToday =
-    date.getFullYear() === now.getFullYear() &&
-    date.getMonth() === now.getMonth() &&
-    date.getDate() === now.getDate();
-  if (isToday) return isDayOnly ? `@today` : `@today ${time}`;
+  // Get date strings in user's timezone for accurate comparison
+  const dateStr = date.toLocaleDateString("en-US", { timeZone: timezone });
+  const nowStr = now.toLocaleDateString("en-US", { timeZone: timezone });
 
-  // Check if tomorrow
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const isTomorrow =
-    date.getFullYear() === tomorrow.getFullYear() &&
-    date.getMonth() === tomorrow.getMonth() &&
-    date.getDate() === tomorrow.getDate();
-  if (isTomorrow) return isDayOnly ? `@tomorrow` : `@tomorrow ${time}`;
+  // Check if today (using timezone-aware comparison)
+  if (dateStr === nowStr) {
+    return isDayOnly ? `@today` : `@today ${time}`;
+  }
 
-  // Use day name
+  // Check if tomorrow (using timezone-aware comparison)
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const tomorrowStr = tomorrow.toLocaleDateString("en-US", { timeZone: timezone });
+  if (dateStr === tomorrowStr) {
+    return isDayOnly ? `@tomorrow` : `@tomorrow ${time}`;
+  }
+
+  // Use day name (already timezone-aware)
   const dayName = date
     .toLocaleDateString("en-US", {
       weekday: "long",
-      timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
+      timeZone: timezone,
     })
     .toLowerCase();
   return isDayOnly ? `@${dayName}` : `@${dayName} ${time}`;

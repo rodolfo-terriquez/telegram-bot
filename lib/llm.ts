@@ -734,10 +734,11 @@ export type ActionContext =
       task: string;
       timeStr: string;
       isImportant: boolean;
+      isDayOnly?: boolean;
     }
   | {
       type: "multiple_reminders_created";
-      reminders: { task: string; timeStr: string; isImportant: boolean }[];
+      reminders: { task: string; timeStr: string; isImportant: boolean; isDayOnly?: boolean }[];
     }
   | { type: "brain_dump_saved"; content: string }
   | {
@@ -770,6 +771,7 @@ export type ActionContext =
       listName: string;
       itemCount: number;
       isImportant: boolean;
+      isDayOnly?: boolean;
     }
   | { type: "list_created"; name: string; itemCount: number }
   | {
@@ -826,13 +828,14 @@ export async function generateActionResponse(
 
   switch (actionContext.type) {
     case "reminder_created":
-      prompt = `The user just set a reminder for "${actionContext.task}" in ${actionContext.timeStr}.${actionContext.isImportant ? " They marked it as important, so I'll nag them until it's done." : ""} Acknowledge this warmly and briefly.`;
+      // timeStr is already formatted with "in X" for timed or "on Tuesday" for day-only
+      prompt = `The user just set a reminder for "${actionContext.task}" ${actionContext.timeStr}.${actionContext.isImportant ? " They marked it as important, so I'll nag them until it's done." : ""}${actionContext.isDayOnly ? " This is a day-only reminder (no specific time) - it will appear in their morning review." : ""} Acknowledge this warmly and briefly.`;
       break;
     case "multiple_reminders_created":
       const reminderList = actionContext.reminders
         .map(
           (r) =>
-            `- "${r.task}" in ${r.timeStr}${r.isImportant ? " (important)" : ""}`,
+            `- "${r.task}" ${r.timeStr}${r.isImportant ? " (important)" : ""}${r.isDayOnly ? " (day-only)" : ""}`,
         )
         .join("\n");
       prompt = `The user just created ${actionContext.reminders.length} reminders:\n${reminderList}\nAcknowledge this briefly - confirm they're set.`;
@@ -882,7 +885,8 @@ export async function generateActionResponse(
       prompt = `The user just set their morning review time to ${actionContext.timeStr}. This is when they'll get a daily summary of their inbox items and any overdue tasks. Confirm this briefly.`;
       break;
     case "reminder_with_list_created":
-      prompt = `The user just set a reminder for "${actionContext.task}" in ${actionContext.timeStr}, with a linked list called "${actionContext.listName}" containing ${actionContext.itemCount} items.${actionContext.isImportant ? " They marked it as important." : ""} Acknowledge warmly - mention both the reminder and that you're keeping track of the list items.`;
+      // timeStr is already formatted with "in X" for timed or "on Tuesday" for day-only
+      prompt = `The user just set a reminder for "${actionContext.task}" ${actionContext.timeStr}, with a linked list called "${actionContext.listName}" containing ${actionContext.itemCount} items.${actionContext.isImportant ? " They marked it as important." : ""}${actionContext.isDayOnly ? " This is a day-only reminder (no specific time)." : ""} Acknowledge warmly - mention both the reminder and that you're keeping track of the list items.`;
       break;
     case "list_created":
       prompt = `The user just created a list called "${actionContext.name}" with ${actionContext.itemCount} items. Acknowledge briefly that the list is saved.`;
@@ -982,7 +986,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
     // Fallbacks for each type
     switch (actionContext.type) {
       case "reminder_created":
-        return `Got it, I'll remind you about ${actionContext.task} in ${actionContext.timeStr}.`;
+        // timeStr already contains "in X" or "on Tuesday"
+        return `Got it, I'll remind you about ${actionContext.task} ${actionContext.timeStr}.`;
       case "multiple_reminders_created":
         return `Set ${actionContext.reminders.length} reminders for you.`;
       case "brain_dump_saved":
@@ -1013,7 +1018,8 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
       case "morning_review_time_set":
         return `Morning review time set to ${actionContext.timeStr}.`;
       case "reminder_with_list_created":
-        return `Got it, I'll remind you about ${actionContext.task} in ${actionContext.timeStr}. Keeping track of ${actionContext.itemCount} items on your ${actionContext.listName} list.`;
+        // timeStr already contains "in X" or "on Tuesday"
+        return `Got it, I'll remind you about ${actionContext.task} ${actionContext.timeStr}. Keeping track of ${actionContext.itemCount} items on your ${actionContext.listName} list.`;
       case "list_created":
         return `Created your ${actionContext.name} list with ${actionContext.itemCount} items.`;
       case "lists_shown":
