@@ -72,12 +72,14 @@ export interface ReminderIntent {
   task: string;
   delayMinutes: number;
   isImportant: boolean;
+  isDayOnly?: boolean; // True for day-only reminders (no specific time)
 }
 
 export interface ReminderItem {
   task: string;
   delayMinutes: number;
   isImportant: boolean;
+  isDayOnly?: boolean; // True for day-only reminders (no specific time)
 }
 
 export interface MultipleRemindersIntent {
@@ -155,6 +157,7 @@ export interface ReminderWithListIntent {
   items: string[];
   delayMinutes: number;
   isImportant: boolean;
+  isDayOnly?: boolean;
 }
 
 export interface CreateListIntent {
@@ -200,6 +203,7 @@ export interface Task {
   nextReminder: number;
   qstashMessageId?: string;
   linkedListId?: string;
+  isDayOnly?: boolean; // True for day-only reminders (no notification, just shows in morning review)
   createdAt: number;
   status: "pending" | "completed";
 }

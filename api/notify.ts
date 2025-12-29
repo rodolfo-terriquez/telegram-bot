@@ -271,19 +271,11 @@ async function handleMorningReview(
 ): Promise<void> {
   const { chatId } = payload;
 
-  // Get today's day name
-  const today = new Date()
-    .toLocaleDateString("en-US", {
-      weekday: "long",
-      timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
-    })
-    .toLowerCase();
-
-  // Get inbox items, overdue tasks, and today's tagged items
-  const [inboxItems, overdueTasks, todayTaggedItems] = await Promise.all([
+  // Get inbox items, overdue tasks, and today's tasks
+  const [inboxItems, overdueTasks, todaysTasks] = await Promise.all([
     redis.getUncheckedInboxItems(chatId),
     redis.getOverdueTasks(chatId),
-    redis.getInboxItemsForDay(chatId, today),
+    redis.getTodaysTasks(chatId),
   ]);
 
   // Get conversation context
@@ -295,19 +287,33 @@ async function handleMorningReview(
     overdueTime: formatOverdueTime(task.nextReminder),
   }));
 
+  // Format today's tasks with time info
+  const formattedToday = todaysTasks.map((task) => ({
+    content: task.content,
+    scheduledTime: formatScheduledTime(task.nextReminder),
+  }));
+
   // Generate the morning review message
   const message = await generateMorningReviewMessage(
     {
       inboxItems: inboxItems.map((item) => ({ content: item.content })),
       overdueTasks: formattedOverdue,
-      todayTaggedItems: todayTaggedItems.map((item) => ({
-        content: item.content,
-      })),
+      todaysTasks: formattedToday,
     },
     context,
   );
 
   await telegram.sendMessage(chatId, message);
+}
+
+function formatScheduledTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  const time = date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
+  });
+  return time;
 }
 
 function formatOverdueTime(timestamp: number): string {

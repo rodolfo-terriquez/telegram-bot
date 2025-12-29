@@ -50,6 +50,7 @@ export async function createTask(
   content: string,
   isImportant: boolean,
   delayMinutes: number,
+  isDayOnly: boolean = false,
 ): Promise<Task> {
   const redis = getClient();
   const id = generateId();
@@ -62,6 +63,7 @@ export async function createTask(
     isImportant,
     naggingLevel: 0,
     nextReminder: now + delayMinutes * 60 * 1000,
+    isDayOnly,
     createdAt: now,
     status: "pending",
   };
@@ -218,6 +220,30 @@ export async function getOverdueTasks(chatId: number): Promise<Task[]> {
   const now = Date.now();
 
   return tasks.filter((task) => task.nextReminder < now);
+}
+
+export async function getTodaysTasks(chatId: number): Promise<Task[]> {
+  const tasks = await getPendingTasks(chatId);
+
+  // Get start and end of today in user's timezone
+  const timezone = process.env.USER_TIMEZONE || "America/Los_Angeles";
+  const now = new Date();
+
+  // Start of today (00:00:00)
+  const startOfDay = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+  startOfDay.setHours(0, 0, 0, 0);
+
+  // End of today (23:59:59)
+  const endOfDay = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const startTimestamp = startOfDay.getTime();
+  const endTimestamp = endOfDay.getTime();
+
+  // Return tasks scheduled for today (between start and end of day)
+  return tasks.filter(
+    (task) => task.nextReminder >= startTimestamp && task.nextReminder <= endTimestamp
+  );
 }
 
 // List operations

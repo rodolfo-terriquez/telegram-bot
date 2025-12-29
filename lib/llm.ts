@@ -191,31 +191,85 @@ When asked for advice, share gently—things that sometimes help people, not ins
 // Intent parsing prompt - stripped down, no personality needed since output is JSON
 const INTENT_PARSING_PROMPT = `Parse user messages into JSON. Output ONLY valid JSON, no markdown or explanation.
 
-CONTEXT RULE: Use conversation history to infer which list the user means. Default to "Inbox" if unclear.
+═══════════════════════════════════════════════════════════════════
+CRITICAL DECISION TREE - READ THIS FIRST:
+═══════════════════════════════════════════════════════════════════
 
-CRITICAL - REMINDER vs INBOX RULES:
-- DAY + TIME (e.g., "tuesday at 3pm", "tomorrow at noon") → reminder with delayMinutes
-- DAY ONLY (e.g., "on tuesday", "this friday") → inbox with dayTag
-- NO DAY/TIME → inbox without dayTag
-- "Remind me that X" → ALWAYS inbox (information capture, not timed reminder)
+When user wants to remember something:
 
-INTENTS:
+1. Does message include a DAY (with or without time)?
+   (e.g., "on Tuesday", "Friday", "tomorrow", "Tuesday at 3pm")
+   YES → Use "reminder" type with delayMinutes (calculated to that day/time)
+   NO → Continue to step 2
 
-REMINDERS (requires BOTH day AND time - "tuesday at 3pm", "in 2 hours", "tomorrow at noon"):
-  reminder → {"type":"reminder","task":"...","delayMinutes":N,"isImportant":bool}
+2. No day or time mentioned
+   → Use "inbox" type without dayTag (will show in every morning review)
+
+IMPORTANT DISTINCTIONS:
+- "on Tuesday" or "Friday" → REMINDER (shows in Reminders list with @tuesday)
+- "at 3pm" or "in 2 hours" → REMINDER (shows in Reminders list with time)
+- "Tuesday at 3pm" → REMINDER (shows in Reminders list with @tuesday 3:00 PM)
+- No day/time at all → INBOX (shows in Inbox, mentioned every morning)
+
+Phrases like "remind me that", "remind me about" are just natural language.
+What matters is whether there's a DAY or TIME mentioned!
+
+═══════════════════════════════════════════════════════════════════
+
+EXAMPLES - STUDY THESE CAREFULLY:
+
+REMINDER (has day OR time OR both):
+  "Remind me that Lili has appointment on Tuesday"
+  → {"type":"reminder","task":"Lili has appointment","delayMinutes":<to Tuesday EOD>,"isImportant":false,"isDayOnly":true}
+
+  "Can you remind me about the dentist on Friday"
+  → {"type":"reminder","task":"the dentist","delayMinutes":<to Friday EOD>,"isImportant":false,"isDayOnly":true}
+
+  "Doctor appointment Tuesday"
+  → {"type":"reminder","task":"doctor appointment","delayMinutes":<to Tuesday EOD>,"isImportant":false,"isDayOnly":true}
+
+  "Remind me to call mom at 3pm"
+  → {"type":"reminder","task":"call mom","delayMinutes":<to today 3pm>,"isImportant":false,"isDayOnly":false}
+
+  "Call dentist tomorrow at 10am"
+  → {"type":"reminder","task":"call dentist","delayMinutes":<to tomorrow 10am>,"isImportant":false,"isDayOnly":false}
+
+  "In 2 hours remind me about the meeting"
+  → {"type":"reminder","task":"about the meeting","delayMinutes":120,"isImportant":false,"isDayOnly":false}
+
+INBOX (no day or time):
+  "Don't let me forget to call mom"
+  → {"type":"inbox","item":"call mom"}
+
+  "Buy groceries"
+  → {"type":"inbox","item":"buy groceries"}
+
+  "Pick up prescription"
+  → {"type":"inbox","item":"pick up prescription"}
+
+═══════════════════════════════════════════════════════════════════
+
+FULL INTENT TYPES:
+
+REMINDERS (when day OR time mentioned):
+  reminder → {"type":"reminder","task":"...","delayMinutes":N,"isImportant":bool,"isDayOnly":bool}
   multiple_reminders → {"type":"multiple_reminders","reminders":[...]}
-  reminder_with_list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool}
+  reminder_with_list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool,"isDayOnly":bool}
   isImportant: "important", "urgent", "nag me", "don't let me forget"
 
-INBOX (no time, or day-only):
-  inbox → {"type":"inbox","item":"...","dayTag":"monday|tuesday|wednesday|thursday|friday|saturday|sunday"|null}
+  CRITICAL - isDayOnly field:
+  - Set isDayOnly:true for day-only reminders (e.g., "on Tuesday", "Friday") - NO specific time mentioned
+  - Set isDayOnly:false for timed reminders (e.g., "at 3pm", "in 2 hours", "Tuesday at 10am")
+  - Day-only reminders appear in morning review but DON'T send notifications
+  - Timed reminders send notifications at the scheduled time
+
+  Note: For day-only reminders, calculate delayMinutes to end of that day (11:59 PM).
+
+INBOX (when NO day or time):
+  inbox → {"type":"inbox","item":"..."}
   brain_dump → {"type":"brain_dump","content":"..."} - REQUIRES: "dump", "note to self", "brain dump"
 
-  Examples:
-    "Buy groceries" → {"type":"inbox","item":"buy groceries"}
-    "Doctor on Tuesday" → {"type":"inbox","item":"doctor","dayTag":"tuesday"}
-    "Remind me about X on Friday" → {"type":"inbox","item":"X","dayTag":"friday"}
-    "Remind me that Lili has appointment Tuesday" → {"type":"inbox","item":"Lili has appointment","dayTag":"tuesday"}
+  Note: Inbox items have NO dayTag anymore. They show in every morning review.
 
 REMINDERS MANAGEMENT:
   mark_done → {"type":"mark_done","taskDescription":"..."}
@@ -238,13 +292,8 @@ SETTINGS:
 OTHER:
   conversation → {"type":"conversation","message":"<COPY VERBATIM>"} - greetings, feelings, small talk
 
-KEY DISTINCTIONS:
-- "Call mom on Tuesday" → inbox with dayTag:"tuesday" (no time = inbox)
-- "Call mom Tuesday at 3pm" → reminder (has day + time)
-- "I did X" after viewing a list → modify_list with check_items
-- mark_done/cancel_task are ONLY for timed reminders
-
-Be lenient with ADHD users.`;
+CONTEXT RULE: Use conversation history to infer which list the user means. Default to "Inbox" if unclear.
+Be lenient with ADHD users - when in doubt between reminder and inbox, choose inbox.`;
 
 export async function parseIntent(
   userMessage: string,
@@ -532,7 +581,7 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
 export interface MorningReviewData {
   inboxItems: { content: string }[];
   overdueTasks: { content: string; overdueTime: string }[];
-  todayTaggedItems?: { content: string }[];
+  todaysTasks?: { content: string; scheduledTime: string }[];
 }
 
 export async function generateMorningReviewMessage(
@@ -543,28 +592,22 @@ export async function generateMorningReviewMessage(
 
   const hasInbox = data.inboxItems.length > 0;
   const hasOverdue = data.overdueTasks.length > 0;
-  const hasTodayItems = (data.todayTaggedItems?.length ?? 0) > 0;
+  const hasTodaysTasks = (data.todaysTasks?.length ?? 0) > 0;
 
   // Build the data section for the prompt
   let dataSection = "";
 
-  // Today's tagged items get priority - these are things the user specifically wanted to see today
-  if (hasTodayItems) {
+  // Today's tasks get priority - these are reminders scheduled for today
+  if (hasTodaysTasks) {
     const todayList = data
-      .todayTaggedItems!.map((i) => `- ${i.content}`)
+      .todaysTasks!.map((t) => `- ${t.content} (${t.scheduledTime})`)
       .join("\n");
-    dataSection += `Items tagged for today (${data.todayTaggedItems!.length}):\n${todayList}\n\n`;
+    dataSection += `Reminders for today (${data.todaysTasks!.length}):\n${todayList}\n\n`;
   }
 
   if (hasInbox) {
-    // Filter out today's tagged items from general inbox to avoid duplication
-    const generalInbox = data.inboxItems.filter(
-      (item) => !data.todayTaggedItems?.some((t) => t.content === item.content),
-    );
-    if (generalInbox.length > 0) {
-      const inboxList = generalInbox.map((i) => `- ${i.content}`).join("\n");
-      dataSection += `Other inbox items (${generalInbox.length}):\n${inboxList}\n\n`;
-    }
+    const inboxList = data.inboxItems.map((i) => `- ${i.content}`).join("\n");
+    dataSection += `Inbox items (${data.inboxItems.length}):\n${inboxList}\n\n`;
   }
 
   if (hasOverdue) {
@@ -577,13 +620,13 @@ export async function generateMorningReviewMessage(
   const systemPrompt = `${TAMA_PERSONALITY}
 
 Generate a gentle morning review message. This is a daily invitation for the user to look at their items. The goal is to help them:
-- See items tagged for today (these are things they specifically wanted to be reminded about on this day)
-- Maybe schedule some inbox items (turn them into reminders with specific times)
+- See today's reminders (these are things scheduled for today with specific times or just for this day)
+- Maybe schedule some inbox items (turn them into reminders with specific times or days)
 - Decide what to do with overdue items: reschedule them, mark them done, or drop them entirely
 
 Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as "in case you want to" or "whenever you're ready." List the items clearly so they can see what's there. Dropping items is always a valid choice. Keep your intro/outro brief, but do show the full lists.`;
 
-  const hasAnyItems = hasTodayItems || hasInbox || hasOverdue;
+  const hasAnyItems = hasTodaysTasks || hasInbox || hasOverdue;
   const taskPrompt = hasAnyItems
     ? `Generate a morning review message with the following items:\n\n${dataSection}`
     : "Generate a brief morning greeting. There are no inbox items or overdue tasks right now.";

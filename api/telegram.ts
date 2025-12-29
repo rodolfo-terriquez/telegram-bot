@@ -338,6 +338,7 @@ async function handleReminders(
     task: string;
     delayMinutes: number;
     isImportant: boolean;
+    isDayOnly?: boolean;
   }>,
   context: ConversationContext,
   skipSend: boolean = false,
@@ -355,20 +356,23 @@ async function handleReminders(
       reminder.task,
       reminder.isImportant,
       reminder.delayMinutes,
+      reminder.isDayOnly || false,
     );
 
-    // Schedule the reminder via QStash
-    try {
-      const messageId = await scheduleReminder(
-        chatId,
-        task.id,
-        reminder.delayMinutes,
-        false,
-      );
-      task.qstashMessageId = messageId;
-      await redis.updateTask(task);
-    } catch (error) {
-      console.error("Failed to schedule QStash reminder:", error);
+    // Schedule the reminder via QStash (skip for day-only reminders)
+    if (!task.isDayOnly) {
+      try {
+        const messageId = await scheduleReminder(
+          chatId,
+          task.id,
+          reminder.delayMinutes,
+          false,
+        );
+        task.qstashMessageId = messageId;
+        await redis.updateTask(task);
+      } catch (error) {
+        console.error("Failed to schedule QStash reminder:", error);
+      }
     }
 
     createdTasks.push({
@@ -730,6 +734,7 @@ async function handleReminderWithList(
     intent.task,
     intent.isImportant,
     intent.delayMinutes,
+    intent.isDayOnly || false,
   );
 
   // Link the task to the list
@@ -740,18 +745,20 @@ async function handleReminderWithList(
   list.linkedTaskId = task.id;
   await redis.updateList(list);
 
-  // Schedule the reminder via QStash
-  try {
-    const messageId = await scheduleReminder(
-      chatId,
-      task.id,
-      intent.delayMinutes,
-      false,
-    );
-    task.qstashMessageId = messageId;
-    await redis.updateTask(task);
-  } catch (error) {
-    console.error("Failed to schedule QStash reminder:", error);
+  // Schedule the reminder via QStash (skip for day-only reminders)
+  if (!task.isDayOnly) {
+    try {
+      const messageId = await scheduleReminder(
+        chatId,
+        task.id,
+        intent.delayMinutes,
+        false,
+      );
+      task.qstashMessageId = messageId;
+      await redis.updateTask(task);
+    } catch (error) {
+      console.error("Failed to schedule QStash reminder:", error);
+    }
   }
 
   const timeStr = formatDelay(intent.delayMinutes);
