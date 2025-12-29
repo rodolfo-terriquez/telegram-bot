@@ -461,6 +461,33 @@ async function handleMarkDone(
   );
 
   if (!task) {
+    // Fallback: Try to find and check off an Inbox item
+    const inbox = await redis.findListByDescription(chatId, "Inbox");
+    if (inbox && intent.taskDescription) {
+      const result = await redis.checkListItems(
+        chatId,
+        inbox.id,
+        [intent.taskDescription],
+        true,
+      );
+      if (result && result.modifiedItems.length > 0) {
+        const response = await generateActionResponse(
+          {
+            type: "list_modified",
+            name: "Inbox",
+            action: "check_items",
+            items: result.modifiedItems,
+          },
+          context,
+        );
+        if (!skipSend) {
+          await telegram.sendMessage(chatId, response);
+        }
+        return response;
+      }
+    }
+
+    // Neither Task nor Inbox item found
     const response = await generateActionResponse(
       {
         type: "task_not_found",
@@ -533,6 +560,30 @@ async function handleCancelTask(
   );
 
   if (!task) {
+    // Fallback: Try to remove from Inbox
+    const inbox = await redis.findListByDescription(chatId, "Inbox");
+    if (inbox && intent.taskDescription) {
+      const result = await redis.removeListItems(chatId, inbox.id, [
+        intent.taskDescription,
+      ]);
+      if (result && result.removedItems.length > 0) {
+        const response = await generateActionResponse(
+          {
+            type: "list_modified",
+            name: "Inbox",
+            action: "remove_items",
+            items: result.removedItems,
+          },
+          context,
+        );
+        if (!skipSend) {
+          await telegram.sendMessage(chatId, response);
+        }
+        return response;
+      }
+    }
+
+    // Neither Task nor Inbox item found
     const response = await generateActionResponse(
       {
         type: "task_not_found",

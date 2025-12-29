@@ -191,49 +191,49 @@ When asked for advice, share gently—things that sometimes help people, not ins
 // Intent parsing prompt - stripped down, no personality needed since output is JSON
 const INTENT_PARSING_PROMPT = `Parse user messages into JSON. Output ONLY valid JSON, no markdown or explanation.
 
-TIME RULES: Convert all times to delayMinutes from current time. Past times today = tomorrow. Default 60 min if unspecified.
+CONTEXT RULE: Use conversation history to infer which list the user means. If they just viewed a list, assume subsequent item operations refer to that list. Default to "Inbox" if unclear.
 
-INTENTS (use the first matching type):
+TIME RULES: Convert times to delayMinutes. Past times today = tomorrow. Default 60 min if unspecified.
 
-REMINDERS - task + time specified:
-  reminder: single task → {"type":"reminder","task":"...","delayMinutes":N,"isImportant":bool}
-  multiple_reminders: 2+ tasks → {"type":"multiple_reminders","reminders":[{task,delayMinutes,isImportant},...]}
-  reminder_with_list: task + item list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool}
-  isImportant=true if: "important", "urgent", "nag me", "don't let me forget"
+INTENTS:
 
-CAPTURE - no time specified, user EXPLICITLY wants to save something:
-  inbox: actionable item, no time → {"type":"inbox","item":"..."}
-  brain_dump: user explicitly wants to capture a thought → {"type":"brain_dump","content":"..."}
-    Keywords: "dump", "note to self", "save this thought", "remember this idea"
-    NOT for: casual conversation, answering questions, sharing feelings (use "conversation" instead)
+REMINDERS (has time):
+  reminder → {"type":"reminder","task":"...","delayMinutes":N,"isImportant":bool}
+  multiple_reminders → {"type":"multiple_reminders","reminders":[...]}
+  reminder_with_list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool}
+  isImportant: "important", "urgent", "nag me", "don't let me forget"
 
-TASK MANAGEMENT:
-  mark_done: completed task → {"type":"mark_done","taskDescription":"..."}
-  cancel_task: cancel 1 task → {"type":"cancel_task","taskDescription":"..."}
-  cancel_multiple_tasks: cancel 2+ → {"type":"cancel_multiple_tasks","taskDescriptions":["...","..."]}
-  list_tasks: show pending reminders → {"type":"list_tasks"}
+CAPTURE (no time):
+  inbox → {"type":"inbox","item":"..."} - includes "remind me that X" with quotes
+  brain_dump → {"type":"brain_dump","content":"..."} - REQUIRES: "dump", "note to self", "brain dump"
+
+REMINDERS MANAGEMENT:
+  mark_done → {"type":"mark_done","taskDescription":"..."}
+  cancel_task → {"type":"cancel_task","taskDescription":"..."}
+  cancel_multiple_tasks → {"type":"cancel_multiple_tasks","taskDescriptions":[...]}
+  list_tasks → {"type":"list_tasks"}
 
 LISTS:
-  create_list: new list, no reminder → {"type":"create_list","name":"...","items":["..."]}
-  show_lists: see all lists → {"type":"show_lists"}
-  show_list: see specific list → {"type":"show_list","listDescription":"..."} (use "Inbox" for inbox)
-  modify_list: change list → {"type":"modify_list","listDescription":"...","action":"add_items|remove_items|check_items|uncheck_items|rename","items":["..."],"newName":"..."}
-  delete_list: remove list → {"type":"delete_list","listDescription":"..."}
+  create_list → {"type":"create_list","name":"...","items":[...]}
+  show_lists → {"type":"show_lists"}
+  show_list → {"type":"show_list","listDescription":"..."}
+  modify_list → {"type":"modify_list","listDescription":"...","action":"add_items|remove_items|check_items|uncheck_items|rename","items":[...],"newName":"..."}
+  delete_list → {"type":"delete_list","listDescription":"..."}
 
 SETTINGS:
-  checkin_response: rating 1-5 → {"type":"checkin_response","rating":N,"notes":"..."}
-  set_checkin_time: change checkin → {"type":"set_checkin_time","hour":0-23,"minute":0-59}
-  set_morning_review_time: change morning review → {"type":"set_morning_review_time","hour":0-23,"minute":0-59}
+  checkin_response → {"type":"checkin_response","rating":N,"notes":"..."} - "feeling 3", "I'm a 4", etc.
+  set_checkin_time → {"type":"set_checkin_time","hour":N,"minute":N}
+  set_morning_review_time → {"type":"set_morning_review_time","hour":N,"minute":N}
 
 OTHER:
-  conversation: chat, sharing feelings, answering questions, unclear → {"type":"conversation","message":"<COPY USER INPUT VERBATIM>"}
-    Use this for: greetings, emotional sharing, small talk, responding to Tama's questions
-    IMPORTANT: Copy the user's exact words into "message" - do NOT generate a response, do NOT paraphrase
+  conversation → {"type":"conversation","message":"<COPY VERBATIM>"} - greetings, feelings, small talk
 
-MULTIPLE ITEMS: Use multiple_reminders for 2+ reminders, cancel_multiple_tasks for 2+ cancellations.
-ARRAY OUTPUT: Only for "show all my lists" → return [{type:"show_list",listDescription:"List1"},{type:"show_list",listDescription:"List2"},...].
+KEY DISTINCTIONS:
+- "I did X" after viewing a list → modify_list with check_items (not mark_done)
+- "Remove X from inbox" → modify_list with remove_items (not cancel_task)
+- mark_done/cancel_task are ONLY for timed reminders, not list items
 
-Be lenient with ADHD users - interpret fragmented messages generously.`;
+Be lenient with ADHD users.`;
 
 export async function parseIntent(
   userMessage: string,
