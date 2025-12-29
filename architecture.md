@@ -94,18 +94,21 @@ External Services:
 9. Returns 200 OK to Telegram
 
 **Intent Handlers:**
-- `reminder` - Creates scheduled task with QStash
+- `reminder` - Creates scheduled task (day-only or timed)
+  - Day-only: No specific time, appears only in morning review
+  - Timed: Specific time, sends QStash notification + appears in morning review
 - `multiple_reminders` - Creates multiple scheduled tasks
 - `reminder_with_list` - Creates task with linked checklist
 - `brain_dump` - Saves thought for daily summary
-- `inbox` - Adds item to inbox (with optional day tag)
+- `inbox` - Adds item to inbox (general tasks without dates)
 - `mark_done` - Completes task or checks off inbox item
-- `cancel_task` - Deletes task or removes inbox item
+- `cancel_task` - Deletes scheduled reminder (NOT for list items)
+- `cancel_multiple_tasks` - Deletes multiple scheduled reminders
 - `list_tasks` - Shows all pending reminders
 - `create_list` - Creates new checklist
 - `show_lists` - Shows all lists
 - `show_list` - Shows specific list with items
-- `modify_list` - Add/remove/check/uncheck items
+- `modify_list` - Add/remove/check/uncheck list items (use for inbox removal)
 - `delete_list` - Deletes a list
 - `conversation` - General chat/questions
 - `checkin_response` - Logs daily rating (1-5)
@@ -140,7 +143,7 @@ External Services:
 - `end_of_day` - Midnight message
   - Asks if user wants to remember anything for tomorrow
 - `morning_review` - Morning briefing
-  - Shows today's tagged inbox items
+  - Shows today's scheduled tasks (both day-only and timed reminders)
   - Shows general inbox items
   - Shows overdue tasks
   - Suggests scheduling or dropping items
@@ -175,14 +178,16 @@ Defines all TypeScript interfaces and types:
 **Key Functions:**
 
 **Tasks:**
-- `createTask()` - Stores new task with reminder time
+- `createTask()` - Stores new task with reminder time and isDayOnly flag
 - `getTask()` - Retrieves task by ID
 - `updateTask()` - Updates task state
 - `completeTask()` - Marks task done, increments daily counter
 - `deleteTask()` - Removes task
 - `getPendingTasks()` - Gets all pending tasks sorted by reminder time
-- `findTaskByDescription()` - Fuzzy search for task
+- `findTaskByDescription()` - Fuzzy search with metadata normalization
+- `findTasksByDescriptions()` - Fuzzy search for multiple tasks
 - `getOverdueTasks()` - Gets tasks past reminder time
+- `getTodaysTasks()` - Gets tasks scheduled for today (00:00-23:59)
 
 **Lists:**
 - `createList()` - Creates checklist with items
@@ -244,10 +249,12 @@ Defines all TypeScript interfaces and types:
 
 **Intent Parsing:**
 - `parseIntent()` - Converts user message to structured intent(s)
-  - Includes last 10 messages for context
-  - Handles ambiguous references ("that list", "the task")
+  - Includes last 10 messages for context (plain text format, not JSON)
+  - Handles ambiguous references ("that list", "the task", "those items")
   - Can return single intent or array of intents
   - Falls back to conversation intent on parse failure
+  - Distinguishes between cancel_task (reminders) and modify_list (list items)
+  - Properly handles day-only vs timed reminders (isDayOnly flag)
 
 **Message Generation:**
 - `generateReminderMessage()` - First reminder notification
@@ -287,6 +294,9 @@ Every LLM call receives:
 - `downloadFile()` - Downloads file from Telegram
 - `setWebhook()` - Configures webhook URL
 - `sendDocument()` - Sends file (used for debug exports)
+- `formatScheduledTime()` - Formats task time as "@day [time]"
+  - Day-only reminders: "@tuesday" (no time)
+  - Timed reminders: "@tuesday 3:00 PM"
 
 #### `whisper.ts`
 **Purpose:** OpenAI Whisper API wrapper for voice transcription
@@ -379,12 +389,14 @@ All cron expressions are prefixed with `CRON_TZ={timezone}` for user-specific ti
 ```
 1. QStash → /api/notify (8 AM daily)
 2. /api/notify:
-   a. Determine current day (monday, tuesday, etc.)
-   b. Load from Redis:
-      - Inbox items tagged for today (@monday, etc.)
-      - All unchecked inbox items
+   a. Load from Redis:
+      - Today's scheduled tasks (00:00-23:59, includes day-only and timed)
+      - All unchecked inbox items (general tasks)
       - Overdue tasks
-   c. Load conversation context
+   b. Load conversation context
+   c. Format task times:
+      - Day-only: "anytime"
+      - Timed: "3:00 PM"
    d. Generate review message via LLM
    e. Send to user
 ```
@@ -408,24 +420,41 @@ After sending a reminder, the bot schedules a gentle follow-up (5-10 min later) 
 ### 5. Escalating Reminders
 Important tasks trigger a nagging schedule with increasing delays (1h → 2h → 4h → 6h → 8h), stopping at level 5 to avoid annoyance.
 
-### 6. Fuzzy Matching
-Task and list lookups use fuzzy string matching (substring, word-based) to handle imprecise user references like "the grocery thing" or "that list".
+### 6. Fuzzy Matching with Metadata Normalization
+Task and list lookups use fuzzy string matching (substring, word-based) to handle imprecise user references. The `stripSchedulingMetadata()` function normalizes both search queries and stored content by:
+- Removing scheduling metadata ("@sunday 2:29 PM", "(overdue)", "(important)")
+- Normalizing apostrophes and whitespace
+- Case-insensitive matching
+This allows matching "Lili has appointment" against "Lili has appointment on Tuesday @sunday 2:29 PM (overdue)".
 
-### 7. Dual-Use Inbox
+### 7. Day-Only vs Timed Reminders
+Reminders have two modes controlled by the `isDayOnly` flag:
+- **Day-only** (isDayOnly: true): "Remind me about X on Tuesday"
+  - Scheduled to end of day (11:59 PM) for filtering purposes
+  - NO QStash notification scheduled
+  - Only appears in morning review for that day
+  - Displayed as "@tuesday" without time
+- **Timed** (isDayOnly: false): "Remind me about X at 3pm"
+  - Scheduled to specific time
+  - QStash notification sent at that time
+  - Also appears in morning review for that day
+  - Displayed as "@today 3:00 PM" with time
+
+### 8. Dual-Use Inbox
 The "Inbox" is a special list that serves as both:
 - A capture inbox for quick thoughts
-- A day-tagged task list (@monday, @tuesday)
+- General tasks without specific dates
 
-### 8. Personality Consistency
+### 9. Personality Consistency
 All LLM-generated text uses the same "Tama" personality prompt to maintain consistent tone and style across all interactions.
 
-### 9. Graceful Fallbacks
+### 10. Graceful Fallbacks
 - Markdown parsing fails → retry without parse_mode
 - Intent parsing fails → treat as conversation
 - LLM unavailable → use hardcoded fallback messages
 - Schedule deletion fails → log and continue
 
-### 10. Serverless Constraints
+### 11. Serverless Constraints
 - 10-second timeout on Vercel → all operations optimized
 - Stateless functions → all state in Redis
 - No background jobs → QStash handles scheduling
@@ -477,6 +506,7 @@ All LLM-generated text uses the same "Tama" personality prompt to maintain consi
   "chatId": 123456,
   "content": "Call dentist",
   "isImportant": true,
+  "isDayOnly": false,
   "naggingLevel": 0,
   "nextReminder": 1234567890000,
   "qstashMessageId": "msg_...",
@@ -485,6 +515,10 @@ All LLM-generated text uses the same "Tama" personality prompt to maintain consi
   "status": "pending"
 }
 ```
+
+**Note:** `isDayOnly` determines reminder behavior:
+- `true`: Only appears in morning review, no notification
+- `false`: Sends QStash notification + appears in morning review
 
 **List:**
 ```json
@@ -588,11 +622,18 @@ All LLM-generated text uses the same "Tama" personality prompt to maintain consi
 
 ## Special Features
 
-### 1. Ambiguous Reminder Handling
-The bot can handle messages like "Doctor on Tuesday" vs "Doctor Tuesday at 3pm":
-- Day + time → scheduled reminder with specific time
-- Day only → inbox item with day tag (@tuesday)
-- No time info → inbox item without tag
+### 1. Day-Only vs Timed Reminder Detection
+The bot distinguishes between day-only and timed reminders:
+- "Doctor on Tuesday" → Day-only reminder (isDayOnly: true)
+  - Appears in Tuesday's morning review only
+  - No notification sent
+  - Displayed as "@tuesday"
+- "Doctor Tuesday at 3pm" → Timed reminder (isDayOnly: false)
+  - Notification sent at 3pm
+  - Also appears in Tuesday's morning review
+  - Displayed as "@tuesday 3:00 PM"
+- "Buy groceries" → Inbox item (no date)
+  - Appears in every morning review until checked off
 
 ### 2. Debug Command
 Send `/debug` to get a markdown file with:
@@ -704,30 +745,49 @@ For local testing with Telegram:
 
 ---
 
+## Recent Improvements
+
+1. **Intent Parsing Enhancements (December 2025):**
+   - Changed conversation history from JSON to plain text format
+   - Prevents LLM from mimicking conversation format in responses
+   - Added clear examples for show_list vs inbox intents
+   - Clarified cancel_task (reminders only) vs modify_list (list items)
+   - Improved context rules for inferring list references
+
+2. **Day-Only Reminders:**
+   - Added isDayOnly flag to distinguish day-only from timed reminders
+   - Day-only reminders only appear in morning review (no notifications)
+   - Timed reminders send notifications AND appear in morning review
+   - Fixed display formatting (day-only shows "@tuesday", timed shows "@tuesday 3:00 PM")
+
+3. **Fuzzy Matching Improvements:**
+   - Added stripSchedulingMetadata() to normalize task descriptions
+   - Removes "@day time", "(overdue)", "(important)" from comparisons
+   - Better matching of user references to stored tasks
+
 ## Issues to Watch
 
-Based on the recent commits, here are potential areas that might have issues:
-
-1. **Intent Parsing Ambiguity:**
-   - Recent commit "Added support for ambiguous reminders"
-   - May need refinement for edge cases
-
-2. **LLM Parameter Configuration:**
-   - Added OPENROUTER_*_PARAMS for custom parameters
+1. **LLM Parameter Configuration:**
+   - OPENROUTER_*_PARAMS accept JSON for custom parameters
    - Complex nested JSON may have parsing issues
 
-3. **Conversation Summarization:**
+2. **Conversation Summarization:**
    - Async background summarization
    - Race conditions possible if messages added during summarization
    - Mitigated by re-reading current state before saving summary
 
-4. **Timezone Handling:**
+3. **Timezone Handling:**
    - Single timezone assumption
    - May cause issues for users in different zones
 
-5. **Follow-up Cancellation:**
+4. **Follow-up Cancellation:**
    - Race condition between follow-up timer and user response
    - Mitigated by checking pending follow-up state
+
+5. **Intent Classification Edge Cases:**
+   - "What's in my inbox" vs "Add X to inbox" distinction
+   - "Clear those reminders" (scheduled tasks) vs "Clear those items" (list items)
+   - Improved with examples but edge cases may still exist
 
 ---
 
