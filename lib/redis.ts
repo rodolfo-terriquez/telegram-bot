@@ -98,7 +98,11 @@ export async function completeTask(
   if (!task) return null;
 
   task.status = "completed";
-  await updateTask(task);
+
+  // Save completed task with TTL (7 days for debugging/inspection)
+  const TTL_7_DAYS = 7 * 24 * 60 * 60;
+  await redis.set(TASK_KEY(chatId, task.id), JSON.stringify(task), { ex: TTL_7_DAYS });
+
   await redis.srem(TASKS_SET_KEY(chatId), taskId);
 
   // Track completion count for the day
@@ -572,7 +576,7 @@ export async function createBrainDump(
   const id = generateId();
   const now = Date.now();
   const todayKey = getTodayKey();
-  const TTL_30_DAYS = 30 * 24 * 60 * 60;
+  const TTL_14_DAYS = 14 * 24 * 60 * 60;
 
   const dump: BrainDump = {
     id,
@@ -583,9 +587,9 @@ export async function createBrainDump(
 
   await redis.set(DUMP_KEY(chatId, id), JSON.stringify(dump));
   await redis.sadd(DUMPS_SET_KEY(chatId, todayKey), id);
-  // Set expiration for dumps and their index set (30 days)
-  await redis.expire(DUMP_KEY(chatId, id), TTL_30_DAYS);
-  await redis.expire(DUMPS_SET_KEY(chatId, todayKey), TTL_30_DAYS);
+  // Set expiration for dumps and their index set (14 days)
+  await redis.expire(DUMP_KEY(chatId, id), TTL_14_DAYS);
+  await redis.expire(DUMPS_SET_KEY(chatId, todayKey), TTL_14_DAYS);
 
   return dump;
 }

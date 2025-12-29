@@ -330,12 +330,15 @@ async function handleIntent(
         skipSend,
       );
 
-    default:
+    default: {
+      // Safety net for runtime - TypeScript knows this is unreachable
+      const unknownIntent = intent as { type: string };
       console.error(
-        `Unknown intent type: ${intent.type}`,
+        `Unknown intent type: ${unknownIntent.type}`,
         JSON.stringify(intent),
       );
       return null;
+    }
   }
 }
 
@@ -354,6 +357,7 @@ async function handleReminders(
     task: string;
     timeStr: string;
     isImportant: boolean;
+    isDayOnly: boolean;
   }[] = [];
 
   for (const reminder of reminders) {
