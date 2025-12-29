@@ -426,24 +426,23 @@ async function handleBrainDump(
 
 async function handleInbox(
   chatId: number,
-  intent: { type: "inbox"; item: string },
+  intent: { type: "inbox"; item: string; dayTag?: string },
   context: ConversationContext,
   skipSend: boolean = false,
 ): Promise<string> {
-  const inbox = await redis.addToInbox(chatId, intent.item);
+  const inbox = await redis.addToInbox(chatId, intent.item, intent.dayTag);
 
   const response = await generateActionResponse(
     {
       type: "inbox_item_added",
       item: intent.item,
       inboxCount: inbox.items.length,
+      dayTag: intent.dayTag,
     },
     context,
   );
   if (!skipSend) {
-    if (!skipSend) {
-      await telegram.sendMessage(chatId, response);
-    }
+    await telegram.sendMessage(chatId, response);
   }
   return response;
 }
@@ -698,8 +697,9 @@ async function handleListTasks(
 
   const taskList = tasks.map((t) => ({
     content: t.content,
-    timeStr: formatFutureTime(t.nextReminder),
+    scheduledFor: formatScheduledTime(t.nextReminder),
     isImportant: t.isImportant,
+    isOverdue: t.nextReminder < Date.now(),
   }));
 
   const response = await generateActionResponse(
@@ -1259,6 +1259,41 @@ function formatFutureTime(timestamp: number): string {
 
   const days = Math.floor(hours / 24);
   return `in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+function formatScheduledTime(timestamp: number): string {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const time = date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
+  });
+
+  // Check if today
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  if (isToday) return `@today ${time}`;
+
+  // Check if tomorrow
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const isTomorrow =
+    date.getFullYear() === tomorrow.getFullYear() &&
+    date.getMonth() === tomorrow.getMonth() &&
+    date.getDate() === tomorrow.getDate();
+  if (isTomorrow) return `@tomorrow ${time}`;
+
+  // Use day name
+  const dayName = date
+    .toLocaleDateString("en-US", {
+      weekday: "long",
+      timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
+    })
+    .toLowerCase();
+  return `@${dayName} ${time}`;
 }
 
 async function handleCheckinResponse(

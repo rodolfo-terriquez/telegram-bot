@@ -90,9 +90,19 @@ export interface BrainDumpIntent {
   content: string;
 }
 
+export type DayTag =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
 export interface InboxIntent {
   type: "inbox";
   item: string;
+  dayTag?: DayTag;
 }
 
 export interface MarkDoneIntent {

@@ -271,10 +271,19 @@ async function handleMorningReview(
 ): Promise<void> {
   const { chatId } = payload;
 
-  // Get inbox items and overdue tasks
-  const [inboxItems, overdueTasks] = await Promise.all([
+  // Get today's day name
+  const today = new Date()
+    .toLocaleDateString("en-US", {
+      weekday: "long",
+      timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
+    })
+    .toLowerCase();
+
+  // Get inbox items, overdue tasks, and today's tagged items
+  const [inboxItems, overdueTasks, todayTaggedItems] = await Promise.all([
     redis.getUncheckedInboxItems(chatId),
     redis.getOverdueTasks(chatId),
+    redis.getInboxItemsForDay(chatId, today),
   ]);
 
   // Get conversation context
@@ -291,6 +300,9 @@ async function handleMorningReview(
     {
       inboxItems: inboxItems.map((item) => ({ content: item.content })),
       overdueTasks: formattedOverdue,
+      todayTaggedItems: todayTaggedItems.map((item) => ({
+        content: item.content,
+      })),
     },
     context,
   );

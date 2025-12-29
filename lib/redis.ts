@@ -251,12 +251,19 @@ export async function getOrCreateInbox(chatId: number): Promise<List> {
   return createList(chatId, INBOX_NAME, []);
 }
 
-export async function addToInbox(chatId: number, item: string): Promise<List> {
+export async function addToInbox(
+  chatId: number,
+  item: string,
+  dayTag?: string,
+): Promise<List> {
   const inbox = await getOrCreateInbox(chatId);
+
+  // Append day tag to content if provided (e.g., "doctor appointment @tuesday")
+  const displayContent = dayTag ? `${item} @${dayTag}` : item;
 
   const newItem: ListItem = {
     id: generateId(),
-    content: item,
+    content: displayContent,
     isChecked: false,
     createdAt: Date.now(),
   };
@@ -276,6 +283,22 @@ export async function getUncheckedInboxItems(
   if (!inbox) return [];
 
   return inbox.items.filter((item) => !item.isChecked);
+}
+
+export async function getInboxItemsForDay(
+  chatId: number,
+  day: string,
+): Promise<ListItem[]> {
+  const lists = await getActiveLists(chatId);
+  const inbox = lists.find((l) => l.name === INBOX_NAME);
+
+  if (!inbox) return [];
+
+  const dayLower = day.toLowerCase();
+  return inbox.items.filter(
+    (item) =>
+      !item.isChecked && item.content.toLowerCase().includes(`@${dayLower}`),
+  );
 }
 
 export async function getList(

@@ -191,27 +191,37 @@ When asked for advice, share gently—things that sometimes help people, not ins
 // Intent parsing prompt - stripped down, no personality needed since output is JSON
 const INTENT_PARSING_PROMPT = `Parse user messages into JSON. Output ONLY valid JSON, no markdown or explanation.
 
-CONTEXT RULE: Use conversation history to infer which list the user means. If they just viewed a list, assume subsequent item operations refer to that list. Default to "Inbox" if unclear.
+CONTEXT RULE: Use conversation history to infer which list the user means. Default to "Inbox" if unclear.
 
-TIME RULES: Convert times to delayMinutes. Past times today = tomorrow. Default 60 min if unspecified.
+CRITICAL - REMINDER vs INBOX RULES:
+- DAY + TIME (e.g., "tuesday at 3pm", "tomorrow at noon") → reminder with delayMinutes
+- DAY ONLY (e.g., "on tuesday", "this friday") → inbox with dayTag
+- NO DAY/TIME → inbox without dayTag
+- "Remind me that X" → ALWAYS inbox (information capture, not timed reminder)
 
 INTENTS:
 
-REMINDERS (has time):
+REMINDERS (requires BOTH day AND time - "tuesday at 3pm", "in 2 hours", "tomorrow at noon"):
   reminder → {"type":"reminder","task":"...","delayMinutes":N,"isImportant":bool}
   multiple_reminders → {"type":"multiple_reminders","reminders":[...]}
   reminder_with_list → {"type":"reminder_with_list","task":"...","listName":"...","items":[...],"delayMinutes":N,"isImportant":bool}
   isImportant: "important", "urgent", "nag me", "don't let me forget"
 
-CAPTURE (no time):
-  inbox → {"type":"inbox","item":"..."} - includes "remind me that X" with quotes
+INBOX (no time, or day-only):
+  inbox → {"type":"inbox","item":"...","dayTag":"monday|tuesday|wednesday|thursday|friday|saturday|sunday"|null}
   brain_dump → {"type":"brain_dump","content":"..."} - REQUIRES: "dump", "note to self", "brain dump"
+
+  Examples:
+    "Buy groceries" → {"type":"inbox","item":"buy groceries"}
+    "Doctor on Tuesday" → {"type":"inbox","item":"doctor","dayTag":"tuesday"}
+    "Remind me about X on Friday" → {"type":"inbox","item":"X","dayTag":"friday"}
+    "Remind me that Lili has appointment Tuesday" → {"type":"inbox","item":"Lili has appointment","dayTag":"tuesday"}
 
 REMINDERS MANAGEMENT:
   mark_done → {"type":"mark_done","taskDescription":"..."}
   cancel_task → {"type":"cancel_task","taskDescription":"..."}
   cancel_multiple_tasks → {"type":"cancel_multiple_tasks","taskDescriptions":[...]}
-  list_tasks → {"type":"list_tasks"}
+  list_tasks → {"type":"list_tasks"} - "show reminders", "what's scheduled", "my reminders"
 
 LISTS:
   create_list → {"type":"create_list","name":"...","items":[...]}
@@ -229,9 +239,10 @@ OTHER:
   conversation → {"type":"conversation","message":"<COPY VERBATIM>"} - greetings, feelings, small talk
 
 KEY DISTINCTIONS:
-- "I did X" after viewing a list → modify_list with check_items (not mark_done)
-- "Remove X from inbox" → modify_list with remove_items (not cancel_task)
-- mark_done/cancel_task are ONLY for timed reminders, not list items
+- "Call mom on Tuesday" → inbox with dayTag:"tuesday" (no time = inbox)
+- "Call mom Tuesday at 3pm" → reminder (has day + time)
+- "I did X" after viewing a list → modify_list with check_items
+- mark_done/cancel_task are ONLY for timed reminders
 
 Be lenient with ADHD users.`;
 
@@ -521,6 +532,7 @@ Generate a gentle end-of-day message. Ask if there's anything the user wants to 
 export interface MorningReviewData {
   inboxItems: { content: string }[];
   overdueTasks: { content: string; overdueTime: string }[];
+  todayTaggedItems?: { content: string }[];
 }
 
 export async function generateMorningReviewMessage(
@@ -531,13 +543,28 @@ export async function generateMorningReviewMessage(
 
   const hasInbox = data.inboxItems.length > 0;
   const hasOverdue = data.overdueTasks.length > 0;
+  const hasTodayItems = (data.todayTaggedItems?.length ?? 0) > 0;
 
   // Build the data section for the prompt
   let dataSection = "";
 
+  // Today's tagged items get priority - these are things the user specifically wanted to see today
+  if (hasTodayItems) {
+    const todayList = data
+      .todayTaggedItems!.map((i) => `- ${i.content}`)
+      .join("\n");
+    dataSection += `Items tagged for today (${data.todayTaggedItems!.length}):\n${todayList}\n\n`;
+  }
+
   if (hasInbox) {
-    const inboxList = data.inboxItems.map((i) => `- ${i.content}`).join("\n");
-    dataSection += `Inbox items (${data.inboxItems.length}):\n${inboxList}\n\n`;
+    // Filter out today's tagged items from general inbox to avoid duplication
+    const generalInbox = data.inboxItems.filter(
+      (item) => !data.todayTaggedItems?.some((t) => t.content === item.content),
+    );
+    if (generalInbox.length > 0) {
+      const inboxList = generalInbox.map((i) => `- ${i.content}`).join("\n");
+      dataSection += `Other inbox items (${generalInbox.length}):\n${inboxList}\n\n`;
+    }
   }
 
   if (hasOverdue) {
@@ -549,16 +576,17 @@ export async function generateMorningReviewMessage(
 
   const systemPrompt = `${TAMA_PERSONALITY}
 
-Generate a gentle morning review message. This is a daily invitation for the user to look at their inbox items and overdue reminders. The goal is to help them:
+Generate a gentle morning review message. This is a daily invitation for the user to look at their items. The goal is to help them:
+- See items tagged for today (these are things they specifically wanted to be reminded about on this day)
 - Maybe schedule some inbox items (turn them into reminders with specific times)
 - Decide what to do with overdue items: reschedule them, mark them done, or drop them entirely
 
 Keep it warm and low-pressure. This is an invitation, not a demand. Frame it as "in case you want to" or "whenever you're ready." List the items clearly so they can see what's there. Dropping items is always a valid choice. Keep your intro/outro brief, but do show the full lists.`;
 
-  const taskPrompt =
-    hasInbox || hasOverdue
-      ? `Generate a morning review message with the following items:\n\n${dataSection}`
-      : "Generate a brief morning greeting. There are no inbox items or overdue tasks right now.";
+  const hasAnyItems = hasTodayItems || hasInbox || hasOverdue;
+  const taskPrompt = hasAnyItems
+    ? `Generate a morning review message with the following items:\n\n${dataSection}`
+    : "Generate a brief morning greeting. There are no inbox items or overdue tasks right now.";
 
   const response = await client.chat.completions.create({
     model: getChatModel(),
@@ -665,13 +693,23 @@ export type ActionContext =
       reminders: { task: string; timeStr: string; isImportant: boolean }[];
     }
   | { type: "brain_dump_saved"; content: string }
-  | { type: "inbox_item_added"; item: string; inboxCount: number }
+  | {
+      type: "inbox_item_added";
+      item: string;
+      inboxCount: number;
+      dayTag?: string;
+    }
   | { type: "task_completed"; task: string }
   | { type: "task_cancelled"; task: string }
   | { type: "multiple_tasks_cancelled"; tasks: string[] }
   | {
       type: "task_list";
-      tasks: { content: string; timeStr: string; isImportant: boolean }[];
+      tasks: {
+        content: string;
+        scheduledFor: string;
+        isImportant: boolean;
+        isOverdue: boolean;
+      }[];
     }
   | { type: "no_tasks" }
   | { type: "task_not_found"; action: "done" | "cancel" }
@@ -756,7 +794,11 @@ export async function generateActionResponse(
       prompt = `The user just captured a thought/brain dump: "${actionContext.content}". Acknowledge that it's been saved and they'll see it in their daily summary. Keep it very brief.`;
       break;
     case "inbox_item_added":
-      prompt = `The user mentioned something they need to do: "${actionContext.item}". It's been added to their Inbox (${actionContext.inboxCount} item${actionContext.inboxCount === 1 ? "" : "s"} total). Acknowledge very briefly - just confirm it's in the inbox.`;
+      if (actionContext.dayTag) {
+        prompt = `The user mentioned something they need to do: "${actionContext.item}" tagged for ${actionContext.dayTag}. It's been added to their Inbox with @${actionContext.dayTag} tag and will appear in their morning review on that day. Acknowledge very briefly.`;
+      } else {
+        prompt = `The user mentioned something they need to do: "${actionContext.item}". It's been added to their Inbox (${actionContext.inboxCount} item${actionContext.inboxCount === 1 ? "" : "s"} total). Acknowledge very briefly - just confirm it's in the inbox.`;
+      }
       break;
     case "task_completed":
       prompt = `The user just marked "${actionContext.task}" as done. Give them a calm, proportional acknowledgment.`;
@@ -772,10 +814,10 @@ export async function generateActionResponse(
       const formattedTasks = actionContext.tasks
         .map(
           (t, i) =>
-            `${i + 1}. ${t.content}${t.isImportant ? " (important)" : ""} - ${t.timeStr}`,
+            `${i + 1}. ${t.content} ${t.scheduledFor}${t.isImportant ? " (important)" : ""}${t.isOverdue ? " (overdue)" : ""}`,
         )
         .join("\n");
-      prompt = `Show the user their pending tasks in a clear format. Here are the tasks:\n${formattedTasks}\n\nPresent this list clearly. You can add a brief, warm intro or outro but keep it minimal.`;
+      prompt = `Show the user their scheduled reminders in a clear format. Here are the reminders:\n${formattedTasks}\n\nPresent this list clearly with the @day time format. You can add a brief, warm intro or outro but keep it minimal.`;
       break;
     case "no_tasks":
       prompt = `The user has no pending tasks or reminders. Let them know in a warm way.`;
@@ -908,7 +950,10 @@ Generate a response to acknowledge an action. Keep it to 1-2 sentences max. Be w
         return `Cancelled ${actionContext.tasks.length} tasks.`;
       case "task_list":
         return actionContext.tasks
-          .map((t, i) => `${i + 1}. ${t.content} - ${t.timeStr}`)
+          .map(
+            (t, i) =>
+              `${i + 1}. ${t.content} ${t.scheduledFor}${t.isOverdue ? " (overdue)" : ""}`,
+          )
           .join("\n");
       case "no_tasks":
         return `You have no pending tasks.`;
