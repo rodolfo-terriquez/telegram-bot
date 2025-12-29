@@ -142,6 +142,20 @@ export async function getPendingTasks(chatId: number): Promise<Task[]> {
   return tasks.sort((a, b) => a.nextReminder - b.nextReminder);
 }
 
+// Helper function to strip scheduling metadata from task descriptions
+// Removes patterns like "@sunday 2:29 PM", "@today 10:00 AM", "(overdue)", "(important)"
+// Also normalizes apostrophes to improve matching
+function stripSchedulingMetadata(description: string): string {
+  return description
+    .toLowerCase()
+    .replace(/@\w+\s+[\d:]+\s+[ap]m/gi, '') // Remove @day time patterns
+    .replace(/\(overdue\)/gi, '') // Remove (overdue)
+    .replace(/\(important\)/gi, '') // Remove (important)
+    .replace(/['']/g, '') // Remove apostrophes for better matching
+    .replace(/\s+/g, ' ') // Normalize multiple spaces to single space
+    .trim();
+}
+
 export async function findTaskByDescription(
   chatId: number,
   description?: string,
@@ -155,12 +169,15 @@ export async function findTaskByDescription(
   }
 
   // Try to find a matching task (fuzzy match)
-  const normalizedDesc = description.toLowerCase();
-  const matchedTask = tasks.find(
-    (t) =>
-      t.content.toLowerCase().includes(normalizedDesc) ||
-      normalizedDesc.includes(t.content.toLowerCase()),
-  );
+  // Strip scheduling metadata and normalize both description and task content
+  const normalizedDesc = stripSchedulingMetadata(description);
+  const matchedTask = tasks.find((t) => {
+    const normalizedTaskContent = stripSchedulingMetadata(t.content);
+    return (
+      normalizedTaskContent.includes(normalizedDesc) ||
+      normalizedDesc.includes(normalizedTaskContent)
+    );
+  });
 
   return matchedTask || tasks[tasks.length - 1];
 }
@@ -176,13 +193,16 @@ export async function findTasksByDescriptions(
   const usedTaskIds = new Set<string>();
 
   for (const description of descriptions) {
-    const normalizedDesc = description.toLowerCase();
-    const matchedTask = tasks.find(
-      (t) =>
-        !usedTaskIds.has(t.id) &&
-        (t.content.toLowerCase().includes(normalizedDesc) ||
-          normalizedDesc.includes(t.content.toLowerCase())),
-    );
+    // Strip scheduling metadata and normalize both description and task content
+    const normalizedDesc = stripSchedulingMetadata(description);
+    const matchedTask = tasks.find((t) => {
+      if (usedTaskIds.has(t.id)) return false;
+      const normalizedTaskContent = stripSchedulingMetadata(t.content);
+      return (
+        normalizedTaskContent.includes(normalizedDesc) ||
+        normalizedDesc.includes(normalizedTaskContent)
+      );
+    });
 
     if (matchedTask) {
       matchedTasks.push(matchedTask);
