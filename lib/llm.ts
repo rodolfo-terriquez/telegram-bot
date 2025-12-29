@@ -312,33 +312,26 @@ export async function parseIntent(
   // Only include last 10 messages (5 pairs) for context - enough for resolving "that", "it", etc.
   const recentHistory = conversationHistory.slice(-10);
 
-  // Add conversation history formatted as JSON
+  // Add conversation history in plain text format (not JSON) to avoid LLM mimicking the structure
   for (const msg of recentHistory) {
-    const contextEntry = {
-      timestamp: formatTimestamp(msg.timestamp),
-      role: msg.role,
-      content: msg.content,
-    };
+    const prefix =
+      msg.role === "user" ? `[${formatTimestamp(msg.timestamp)}] ` : "";
     messages.push({
       role: msg.role,
-      content: JSON.stringify(contextEntry),
+      content: prefix + msg.content,
     });
   }
 
-  // Build the current message as JSON with context
-  const currentTime = formatTimestamp(Date.now());
-  const currentEntry: Record<string, string> = {
-    timestamp: currentTime,
-    role: "user",
-    content: userMessage,
-  };
+  // Build the current message with optional context
+  let currentMessage = userMessage;
   if (isAwaitingCheckin) {
-    currentEntry.context =
-      "The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.";
+    currentMessage =
+      userMessage +
+      "\n\n[Context: The system just sent a daily check-in prompt asking the user to rate their day 1-5. This message is likely a check-in response.]";
   }
 
   // Add current message
-  messages.push({ role: "user", content: JSON.stringify(currentEntry) });
+  messages.push({ role: "user", content: currentMessage });
 
   const response = await client.chat.completions.create({
     model: getIntentModel(),
