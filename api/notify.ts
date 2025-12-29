@@ -290,7 +290,7 @@ async function handleMorningReview(
   // Format today's tasks with time info
   const formattedToday = todaysTasks.map((task) => ({
     content: task.content,
-    scheduledTime: formatScheduledTime(task.nextReminder),
+    scheduledTime: formatScheduledTime(task.nextReminder, task.isDayOnly),
   }));
 
   // Generate the morning review message
@@ -306,7 +306,12 @@ async function handleMorningReview(
   await telegram.sendMessage(chatId, message);
 }
 
-function formatScheduledTime(timestamp: number): string {
+function formatScheduledTime(timestamp: number, isDayOnly: boolean = false): string {
+  // For day-only reminders, show "anytime" or similar
+  if (isDayOnly) {
+    return "anytime";
+  }
+
   const date = new Date(timestamp);
   const time = date.toLocaleTimeString("en-US", {
     hour: "numeric",

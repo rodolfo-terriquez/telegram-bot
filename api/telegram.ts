@@ -714,7 +714,7 @@ async function handleListTasks(
 
   const taskList = tasks.map((t) => ({
     content: t.content,
-    scheduledFor: formatScheduledTime(t.nextReminder),
+    scheduledFor: formatScheduledTime(t.nextReminder, t.isDayOnly),
     isImportant: t.isImportant,
     isOverdue: t.nextReminder < Date.now(),
   }));
@@ -1281,10 +1281,12 @@ function formatFutureTime(timestamp: number): string {
   return `in ${days} day${days === 1 ? "" : "s"}`;
 }
 
-function formatScheduledTime(timestamp: number): string {
+function formatScheduledTime(timestamp: number, isDayOnly: boolean = false): string {
   const date = new Date(timestamp);
   const now = new Date();
-  const time = date.toLocaleTimeString("en-US", {
+
+  // For day-only reminders, don't include the time
+  const time = isDayOnly ? "" : date.toLocaleTimeString("en-US", {
     hour: "numeric",
     minute: "2-digit",
     timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
@@ -1295,7 +1297,7 @@ function formatScheduledTime(timestamp: number): string {
     date.getFullYear() === now.getFullYear() &&
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate();
-  if (isToday) return `@today ${time}`;
+  if (isToday) return isDayOnly ? `@today` : `@today ${time}`;
 
   // Check if tomorrow
   const tomorrow = new Date(now);
@@ -1304,7 +1306,7 @@ function formatScheduledTime(timestamp: number): string {
     date.getFullYear() === tomorrow.getFullYear() &&
     date.getMonth() === tomorrow.getMonth() &&
     date.getDate() === tomorrow.getDate();
-  if (isTomorrow) return `@tomorrow ${time}`;
+  if (isTomorrow) return isDayOnly ? `@tomorrow` : `@tomorrow ${time}`;
 
   // Use day name
   const dayName = date
@@ -1313,7 +1315,7 @@ function formatScheduledTime(timestamp: number): string {
       timeZone: process.env.USER_TIMEZONE || "America/Los_Angeles",
     })
     .toLowerCase();
-  return `@${dayName} ${time}`;
+  return isDayOnly ? `@${dayName}` : `@${dayName} ${time}`;
 }
 
 async function handleCheckinResponse(
