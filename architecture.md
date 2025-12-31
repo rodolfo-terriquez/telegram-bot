@@ -7,7 +7,7 @@ This is a Telegram bot designed to help users with ADHD manage tasks, reminders,
 **Key Characteristics:**
 - Serverless architecture (Vercel Functions)
 - Event-driven (webhooks + scheduled tasks)
-- Conversational AI with personality (Tama - a friendly cat-girl companion)
+- Conversational AI with personality (Tama - a friendly fox-girl companion)
 - Natural language processing for intent parsing
 - Persistent storage with Redis
 - Scheduled reminders with escalation
