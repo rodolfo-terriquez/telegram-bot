@@ -973,3 +973,69 @@ export async function clearPendingFollowUp(
   await redis.del(PENDING_FOLLOW_UP_KEY(chatId));
   return followUp;
 }
+
+// Complete user reset - returns schedule IDs that need to be cancelled
+export async function resetAllUserData(chatId: number): Promise<{
+  scheduleIds: string[];
+}> {
+  const redis = getClient();
+  const scheduleIds: string[] = [];
+
+  // 1. Get user preferences to collect schedule IDs before deleting
+  const prefs = await getUserPreferences(chatId);
+  if (prefs) {
+    if (prefs.checkinScheduleId) scheduleIds.push(prefs.checkinScheduleId);
+    if (prefs.weeklySummaryScheduleId) scheduleIds.push(prefs.weeklySummaryScheduleId);
+    if (prefs.endOfDayScheduleId) scheduleIds.push(prefs.endOfDayScheduleId);
+    if (prefs.morningReviewScheduleId) scheduleIds.push(prefs.morningReviewScheduleId);
+  }
+
+  // 2. Delete all tasks
+  const taskIds = await redis.smembers<string[]>(TASKS_SET_KEY(chatId));
+  if (taskIds && taskIds.length > 0) {
+    for (const taskId of taskIds) {
+      await redis.del(TASK_KEY(chatId, taskId));
+    }
+    await redis.del(TASKS_SET_KEY(chatId));
+  }
+
+  // 3. Delete all lists
+  const listIds = await redis.smembers<string[]>(LISTS_SET_KEY(chatId));
+  if (listIds && listIds.length > 0) {
+    for (const listId of listIds) {
+      await redis.del(LIST_KEY(chatId, listId));
+    }
+    await redis.del(LISTS_SET_KEY(chatId));
+  }
+
+  // 4. Delete conversation history
+  await redis.del(CONVERSATION_KEY(chatId));
+
+  // 5. Delete user preferences
+  await redis.del(USER_PREFS_KEY(chatId));
+
+  // 6. Delete awaiting check-in state
+  await redis.del(AWAITING_CHECKIN_KEY(chatId));
+
+  // 7. Delete pending follow-up
+  await redis.del(PENDING_FOLLOW_UP_KEY(chatId));
+
+  // 8. Remove from active chats so they get treated as a new user
+  await redis.srem(ACTIVE_CHATS_KEY, chatId.toString());
+
+  // Note: We don't delete check-ins (CHECKIN_KEY, CHECKINS_SET_KEY) or 
+  // brain dumps (DUMP_KEY, DUMPS_SET_KEY) as these are historical data
+  // that the user may want to keep. If you want to delete those too,
+  // uncomment the code below.
+
+  // // Delete check-ins
+  // const checkinDates = await redis.smembers<string[]>(CHECKINS_SET_KEY(chatId));
+  // if (checkinDates && checkinDates.length > 0) {
+  //   for (const date of checkinDates) {
+  //     await redis.del(CHECKIN_KEY(chatId, date));
+  //   }
+  //   await redis.del(CHECKINS_SET_KEY(chatId));
+  // }
+
+  return { scheduleIds };
+}

@@ -127,6 +127,28 @@ export default async function handler(
       return;
     }
 
+    // Handle /reset command - full reset (reminders, lists, conversation, schedules)
+    if (userText.trim().toLowerCase() === "/reset") {
+      // Reset all user data and get schedule IDs to cancel
+      const { scheduleIds } = await redis.resetAllUserData(chatId);
+
+      // Cancel all QStash schedules
+      for (const scheduleId of scheduleIds) {
+        await deleteSchedule(scheduleId);
+      }
+
+      // Re-register user and set up fresh schedules (treats them as new)
+      await redis.registerChat(chatId);
+      await setupDefaultSchedules(chatId);
+
+      await telegram.sendMessage(
+        chatId,
+        "All cleared! Your reminders, lists, and conversation history have been reset. Starting fresh!",
+      );
+      res.status(200).json({ ok: true });
+      return;
+    }
+
     // Cancel any pending follow-up since user has responded
     const pendingFollowUp = await redis.clearPendingFollowUp(chatId);
     if (pendingFollowUp?.qstashMessageId) {
